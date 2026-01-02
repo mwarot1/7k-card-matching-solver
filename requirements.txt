@@ -4,3 +4,6 @@ Pillow
 pygetwindow
 pywin32
 pyinstaller
+fastapi
+uvicorn
+python-multipart

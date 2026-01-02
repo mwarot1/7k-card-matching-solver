@@ -1,16 +1,11 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-
-interface SolveResult {
-  session_id: string;
-  pairs_count: number;
-  pairs: [number, number][];
-  grid_faces: Record<string, string | null>;
-  status: string;
-}
+import { useOpenCV } from '../utils/opencv-loader';
+import { ClientSolver, SolveResult } from '../utils/solver';
 
 export default function Home() {
+  const { loaded: cvLoaded, error: cvError } = useOpenCV();
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SolveResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -19,15 +14,27 @@ export default function Home() {
   const [duration, setDuration] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const captureIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const framesRef = useRef<{ ts: number, frame: ImageData, reg: number[] }[]>([]);
+  const solverRef = useRef<ClientSolver | null>(null);
 
-  // Stop timer on unmount
+  // Initialize solver
+  useEffect(() => {
+    if (cvLoaded && !solverRef.current) {
+      solverRef.current = new ClientSolver();
+      solverRef.current.init('/templates/back_card.png')
+        .then(() => console.log("Solver initialized"))
+        .catch(err => setError("Failed to initialize AI solver: " + err.message));
+    }
+  }, [cvLoaded]);
+
+  // Stop timer/capture on unmount
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
     };
   }, []);
 
@@ -47,10 +54,8 @@ export default function Home() {
       }
       setStreamActive(true);
 
-      // Handle stream end (user clicks "Stop Sharing")
       stream.getVideoTracks()[0].onended = () => {
-        stopRecording();
-        setStreamActive(false);
+        stopCapture();
       };
 
     } catch (err) {
@@ -59,50 +64,57 @@ export default function Home() {
   };
 
   const startRecording = () => {
-    if (!streamRef.current) return;
+    if (!streamRef.current || !videoRef.current) return;
 
-    try {
-      const recorder = new MediaRecorder(streamRef.current, { mimeType: 'video/webm;codecs=vp8' });
-      mediaRecorderRef.current = recorder;
-      chunksRef.current = [];
+    setIsRecording(true);
+    setDuration(0);
+    framesRef.current = [];
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
-      };
+    // Timer for display
+    timerRef.current = setInterval(() => {
+      setDuration(prev => prev + 1);
+    }, 1000);
 
-      recorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: 'video/webm' });
-        handleUpload(blob);
-      };
-
-      recorder.start();
-      setIsRecording(true);
-      setDuration(0);
-
-      timerRef.current = setInterval(() => {
-        setDuration(prev => prev + 1);
-      }, 1000);
-
-    } catch (err) {
-      setError('Recording failed to start');
-    }
+    // Capture frames every 200ms
+    const canvas = document.createElement('canvas');
+    captureIntervalRef.current = setInterval(() => {
+      if (!videoRef.current) return;
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        framesRef.current.push({
+          ts: Date.now(),
+          frame: imageData,
+          reg: [0, 0, canvas.width, canvas.height]
+        });
+      }
+    }, 200);
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
+  const stopRecording = async () => {
     setIsRecording(false);
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    if (captureIntervalRef.current) {
+      clearInterval(captureIntervalRef.current);
+      captureIntervalRef.current = null;
+    }
+
+    if (framesRef.current.length > 0) {
+      handleSolve();
+    }
   };
 
   const stopCapture = () => {
-    stopRecording();
+    setIsRecording(false);
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -111,30 +123,13 @@ export default function Home() {
     setStreamActive(false);
   };
 
-  const handleUpload = async (videoBlob: Blob) => {
+  const handleSolve = async () => {
+    if (!solverRef.current) return;
     setLoading(true);
     setError(null);
-    const formData = new FormData();
-    formData.append('file', videoBlob, 'capture.webm');
 
     try {
-      const response = await fetch('http://localhost:8000/solve', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to solve video');
-      }
-
-      const data: SolveResult = await response.json();
-      console.log('DEBUG: Received data from API:', {
-        pairs_count: data.pairs_count,
-        has_grid_faces: !!data.grid_faces,
-        grid_faces_count: data.grid_faces ? Object.keys(data.grid_faces).length : 0,
-        populated_faces: data.grid_faces ? Object.values(data.grid_faces).filter(v => !!v).length : 0
-      });
+      const data = await solverRef.current.solve(framesRef.current);
       setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred during solving');
@@ -143,11 +138,9 @@ export default function Home() {
     }
   };
 
-  // Helper to map 0-23 indices to an 8x3 grid representation
   const renderGrid = () => {
     if (!result) return null;
 
-    // Create a flat array of 24 cards
     const cardMap = new Array(24).fill(null);
     if (result.pairs) {
       result.pairs.forEach((pair, pairIdx) => {
@@ -200,18 +193,20 @@ export default function Home() {
     );
   };
 
+  if (cvError) return <div style={{ color: 'white', textAlign: 'center', padding: '2rem' }}>Error loading AI engine. Please refresh.</div>;
+
   return (
     <main className="main">
       <div className="container">
         <header className="header">
-          <h1 className="title">CardSolverV3</h1>
-          <p className="subtitle">High-Precision AI Card Matching Solver</p>
+          <h1 className="title">มินิเกมส์ เทพเจ้าดอจ</h1>
+          <p className="subtitle">สำหรับเหล่าลิงที่ขี้เกียจจำ</p>
+          {!cvLoaded && <div style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '1rem' }}>Initializing AI Engine...</div>}
         </header>
 
         <section className="glass-card">
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2rem' }}>
 
-            {/* Live Preview / Status */}
             <div style={{
               width: '100%',
               aspectRatio: '16/9',
@@ -267,7 +262,7 @@ export default function Home() {
 
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
               {!streamActive ? (
-                <button className="button" onClick={initCapture} disabled={loading}>
+                <button className="button" onClick={initCapture} disabled={loading || !cvLoaded}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
                   Select Game Window
                 </button>
@@ -318,12 +313,9 @@ export default function Home() {
         {result && (
           <section className="glass-card" style={{ marginTop: '2rem' }}>
             <h2 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', color: 'var(--secondary)', textAlign: 'center' }}>
-              In-Game Result Layout (8x3 Grid)
+              ผลลัพธ์
             </h2>
             {renderGrid()}
-            <p style={{ marginTop: '1.5rem', textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
-              Matched pairs are numbered 1-12 from top-left to bottom-right.
-            </p>
           </section>
         )}
       </div>
