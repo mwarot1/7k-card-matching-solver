@@ -444,8 +444,9 @@ export class ClientSideSolver {
                     // Extract frames with difference from baseline (face revealed)
                     const meanVal = this.cv.mean(roi)[0];
                     
-                    // Look for any difference (>5) and reasonable brightness (>40, <200)
-                    if (meanDiff > 5 && meanVal > 40 && meanVal < 200 && meanDiff > maxDiffs[j]) {
+                    // Increased thresholds: meanDiff >15 ensures significant change from baseline
+                    // meanVal 50-180 ensures proper brightness range for face cards
+                    if (meanDiff > 15 && meanVal > 50 && meanVal < 180 && meanDiff > maxDiffs[j]) {
                         maxDiffs[j] = meanDiff;
                         if (cardFaces.has(j)) cardFaces.get(j).delete();
                         const faceRoi = frames[i].mat.roi(new this.cv.Rect(rect.x, rect.y, rect.width, rect.height));
