@@ -329,7 +329,10 @@ class CardSolver:
             cv2.imwrite(debug_screenshot_dir + "/detected_grid.png", debug_img)
 
         callback("Extracting faces...")
-        debug_faces_dir = "debug_faces"
+        # Use absolute path for debug_faces to avoid pathing issues with API
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        debug_faces_dir = os.path.join(project_root, "debug_faces")
+        
         if not os.path.exists(debug_faces_dir): 
             os.makedirs(debug_faces_dir)
         else:
@@ -370,7 +373,7 @@ class CardSolver:
             start_idx = first_seq[1]
             print("Stable game start found: Sequence " + str(first_seq[0]) + "-" + str(first_seq[1]) + ". Baseline from frame " + str(baseline_idx) + ".")
 
-        cv2.imwrite(debug_screenshot_dir + "/game_start.png", captured_frames[baseline_idx][1])
+        cv2.imwrite(os.path.join(project_root, debug_screenshot_dir, "game_start.png"), captured_frames[baseline_idx][1])
         baseline_frame = captured_frames[baseline_idx][1]
         baseline_reg = captured_frames[baseline_idx][2]
         baseline_gray = cv2.cvtColor(baseline_frame, cv2.COLOR_BGR2GRAY)
@@ -379,13 +382,14 @@ class CardSolver:
             xs, ys = [p[0] for p in poly], [p[1] for p in poly]
             x1, y1, x2, y2 = max(0, min(xs)), max(0, min(ys)), min(baseline_reg[2], max(xs)), min(baseline_reg[3], max(ys))
             per_card_baselines[i] = baseline_gray[y1:y2, x1:x2].copy()
-            cv2.imwrite(debug_faces_dir + "/baseline_" + str(i) + ".png", per_card_baselines[i])
+            cv2.imwrite(os.path.join(debug_faces_dir, "baseline_" + str(i) + ".png"), per_card_baselines[i])
             
         for ts, frame, reg in captured_frames[start_idx:]:
             self._process_frame_for_faces(frame, max_diffs, per_card_baselines)
             
         for i, face in self.card_faces.items():
-            if max_diffs[i] >= 30.0: cv2.imwrite(debug_faces_dir + "/face_" + str(i) + ".png", face)
+            # Always save the best face found to ensure grid is populated
+            cv2.imwrite(os.path.join(debug_faces_dir, f"face_{i}.png"), face)
             
         callback("Solving...")
         pairs = self.find_pairs()
