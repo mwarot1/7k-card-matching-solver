@@ -22,6 +22,7 @@ export default function Home() {
   const [streamActive, setStreamActive] = useState(false);
   const [duration, setDuration] = useState(0);
   const [progress, setProgress] = useState<{current: number, total: number, stage: string, stepHistory?: Array<{step: string, duration: number}>} | null>(null);
+  const [showGuide, setShowGuide] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -220,6 +221,157 @@ export default function Home() {
   return (
     <main className="main">
       <div className="container">
+        {/* Floating Guide Panel */}
+        <div style={{
+          position: 'fixed',
+          top: '1rem',
+          left: '1rem',
+          zIndex: 1000,
+          maxWidth: '350px'
+        }}>
+          <button
+            onClick={() => setShowGuide(!showGuide)}
+            style={{
+              background: 'rgba(59, 130, 246, 0.9)',
+              border: 'none',
+              borderRadius: '50%',
+              width: '48px',
+              height: '48px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+              transition: 'all 0.3s ease',
+              color: 'white',
+              fontSize: '1.5rem',
+              fontWeight: 'bold'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'scale(1.1)';
+              e.currentTarget.style.background = 'rgba(59, 130, 246, 1)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'scale(1)';
+              e.currentTarget.style.background = 'rgba(59, 130, 246, 0.9)';
+            }}
+          >
+            ?
+          </button>
+          
+          {showGuide && (
+            <div style={{
+              marginTop: '0.5rem',
+              background: 'rgba(15, 23, 42, 0.95)',
+              backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(59, 130, 246, 0.3)',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+              animation: 'slideIn 0.3s ease'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                <h3 style={{ color: '#3b82f6', fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>📖 How to Use</h3>
+                <button
+                  onClick={() => setShowGuide(false)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'rgba(255, 255, 255, 0.6)',
+                    fontSize: '1.5rem',
+                    cursor: 'pointer',
+                    padding: 0,
+                    lineHeight: 1
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              
+              <ol style={{ 
+                margin: 0, 
+                paddingLeft: '1.5rem',
+                color: 'rgba(255, 255, 255, 0.9)',
+                fontSize: '0.9rem',
+                lineHeight: '1.8'
+              }}>
+                <li style={{ marginBottom: '0.75rem' }}>
+                  <strong style={{ color: '#60a5fa' }}>Select Game Window</strong>
+                  <br />
+                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
+                    Click the button and choose your game window
+                  </span>
+                </li>
+                <li style={{ marginBottom: '0.75rem' }}>
+                  <strong style={{ color: '#60a5fa' }}>Position the View</strong>
+                  <br />
+                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
+                    Make sure all 24 cards (8×3 grid) are visible
+                  </span>
+                </li>
+                <li style={{ marginBottom: '0.75rem' }}>
+                  <strong style={{ color: '#60a5fa' }}>Start Recording</strong>
+                  <br />
+                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
+                    Begin recording before you start playing
+                  </span>
+                </li>
+                <li style={{ marginBottom: '0.75rem' }}>
+                  <strong style={{ color: '#60a5fa' }}>Play the Game</strong>
+                  <br />
+                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
+                    Reveal all cards naturally during gameplay
+                  </span>
+                </li>
+                <li style={{ marginBottom: '0.75rem' }}>
+                  <strong style={{ color: '#60a5fa' }}>Stop Recording</strong>
+                  <br />
+                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
+                    Once all cards are revealed, stop the recording
+                  </span>
+                </li>
+                <li>
+                  <strong style={{ color: '#60a5fa' }}>Wait for Results</strong>
+                  <br />
+                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
+                    The solver will analyze and show matching pairs
+                  </span>
+                </li>
+              </ol>
+              
+              <div style={{
+                marginTop: '1rem',
+                padding: '0.75rem',
+                background: 'rgba(59, 130, 246, 0.1)',
+                borderRadius: '0.5rem',
+                border: '1px solid rgba(59, 130, 246, 0.3)'
+              }}>
+                <p style={{ 
+                  margin: 0, 
+                  fontSize: '0.8rem', 
+                  color: 'rgba(147, 197, 253, 0.9)',
+                  lineHeight: '1.5'
+                }}>
+                  💡 <strong>Tip:</strong> Record for at least 20-30 seconds to ensure all cards are captured clearly.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+        
+        <style jsx>{`
+          @keyframes slideIn {
+            from {
+              opacity: 0;
+              transform: translateY(-10px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          }
+        `}</style>
+
         <header className="header">
           <h1 className="title">มินิเกมส์ เทพเจ้าดอจ</h1>
           <p className="subtitle">สำหรับเหล่าลิงที่ขี้เกียจจำ</p>
