@@ -39,8 +39,7 @@ export default function Home() {
     const checkCV = setInterval(() => {
       if (window.cv && window.cv.Mat) {
         clearInterval(checkCV);
-        const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
-        solver.init(`${basePath}/templates/BackCard.png`).then(() => {
+        solver.init('/7k-card-matching-solver/templates/BackCard.png').then(() => {
           solverRef.current = solver;
           console.log('Solver initialized');
         }).catch(err => {
