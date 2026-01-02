@@ -62,25 +62,22 @@ async def solve_video(file: UploadFile = File(...)):
     solver.solve_frames(captured_frames, lambda x: print(f"API Progress: {x}"))
     pairs = solver.find_pairs()
     
-    # Prepare results with base64 images
+    # Prepare results using images saved to debug_faces/
     import base64
     grid_faces = {}
+    debug_faces_dir = "debug_faces"
+    
     for i in range(24):
-        # We only send the face if the solver actually detected a face (diff >= 30.0)
-        # We can check max_diffs if we pass it, or just check solver.card_faces
-        # Looking at solver.py, max_diffs is local to solve_frames.
-        # However, solver.card_faces is only updated in _process_frame_for_faces if a NEW max is found.
-        # Let's verify if we can access the max_diffs or just trust card_faces.
-        # Actually, let's just send what we have in card_faces but maybe the user wants 
-        # specifically those that would have been saved to debug_faces/
-        
-        face = solver.card_faces.get(i)
-        if face is not None:
-            _, buffer = cv2.imencode('.png', face)
-            encoded = base64.b64encode(buffer).decode('utf-8')
-            grid_faces[str(i)] = f"data:image/png;base64,{encoded}"
+        face_path = os.path.join(debug_faces_dir, f"face_{i}.png")
+        if os.path.exists(face_path):
+            with open(face_path, "rb") as f:
+                encoded = base64.b64encode(f.read()).decode('utf-8')
+                grid_faces[str(i)] = f"data:image/png;base64,{encoded}"
+                print(f"DEBUG: Read face_{i}.png from disk")
         else:
             grid_faces[str(i)] = None
+
+    print(f"DEBUG: Total grid_faces populated from disk: {len([f for f in grid_faces.values() if f is not None])}")
 
     # Convert pairs (tuples) to lists for clean JSON serialization
     json_pairs = [[int(p[0]), int(p[1])] for p in pairs]

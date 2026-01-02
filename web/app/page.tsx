@@ -129,6 +129,12 @@ export default function Home() {
       }
 
       const data: SolveResult = await response.json();
+      console.log('DEBUG: Received data from API:', {
+        pairs_count: data.pairs_count,
+        has_grid_faces: !!data.grid_faces,
+        grid_faces_count: data.grid_faces ? Object.keys(data.grid_faces).length : 0,
+        populated_faces: data.grid_faces ? Object.values(data.grid_faces).filter(v => !!v).length : 0
+      });
       setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred during solving');

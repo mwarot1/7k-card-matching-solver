@@ -330,7 +330,15 @@ class CardSolver:
 
         callback("Extracting faces...")
         debug_faces_dir = "debug_faces"
-        if not os.path.exists(debug_faces_dir): os.makedirs(debug_faces_dir)
+        if not os.path.exists(debug_faces_dir): 
+            os.makedirs(debug_faces_dir)
+        else:
+            # Clear old faces to prevent leakage from previous sessions
+            import shutil
+            for f in os.listdir(debug_faces_dir):
+                if f.startswith("face_"):
+                    try: os.remove(os.path.join(debug_faces_dir, f))
+                    except: pass
         max_diffs = {i: 0.0 for i in range(len(self.locations))}
         self.card_faces = {}
         all_back_sequences = []
