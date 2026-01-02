@@ -8,15 +8,12 @@ import cv2
 import numpy as np
 from solver import CardSolver
 
-app = FastAPI(title="CardSolverV3 API")
+app = FastAPI(title="มินิเกมส์ เทพเจ้าดอจ API")
 
 # Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://mwarot1.github.io"
-    ],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
