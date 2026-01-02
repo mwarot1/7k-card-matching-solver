@@ -1,0 +1,6 @@
+opencv-python
+numpy
+Pillow
+pygetwindow
+pywin32
+pyinstaller
