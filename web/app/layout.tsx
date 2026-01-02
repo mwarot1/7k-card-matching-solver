@@ -14,8 +14,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "CardSolverV3 | AI Mathching Solver",
-  description: "Advanced AI-powered card matching solver for 7k Minigames",
+  title: "มินิเกมส์ เทพเจ้าดอจ",
+  description: "สำหรับเหล่าลิงที่ขี้เกียจจำ - Advanced AI-powered card matching solver",
 };
 
 export default function RootLayout({
