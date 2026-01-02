@@ -65,7 +65,9 @@ async def solve_video(file: UploadFile = File(...)):
     # Prepare results using images saved to debug_faces/
     import base64
     grid_faces = {}
-    debug_faces_dir = "debug_faces"
+    # base_dir should be the project root (parent of the api folder)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    debug_faces_dir = os.path.join(base_dir, "debug_faces")
     
     for i in range(24):
         face_path = os.path.join(debug_faces_dir, f"face_{i}.png")
