@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { ClientSideSolver, SolveResult as ClientSolveResult } from '../utils/solver';
+import guideConfig from '../config/guide.json';
 
 interface SolveResult {
   session_id?: string;
@@ -22,7 +23,7 @@ export default function Home() {
   const [streamActive, setStreamActive] = useState(false);
   const [duration, setDuration] = useState(0);
   const [progress, setProgress] = useState<{current: number, total: number, stage: string, stepHistory?: Array<{step: string, duration: number}>} | null>(null);
-  const [showGuide, setShowGuide] = useState(false);
+  const [showGuide, setShowGuide] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -271,7 +272,7 @@ export default function Home() {
               animation: 'slideIn 0.3s ease'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                <h3 style={{ color: '#3b82f6', fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>📖 How to Use</h3>
+                <h3 style={{ color: '#3b82f6', fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>{guideConfig.title}</h3>
                 <button
                   onClick={() => setShowGuide(false)}
                   style={{
@@ -295,48 +296,15 @@ export default function Home() {
                 fontSize: '0.9rem',
                 lineHeight: '1.8'
               }}>
-                <li style={{ marginBottom: '0.75rem' }}>
-                  <strong style={{ color: '#60a5fa' }}>Select Game Window</strong>
-                  <br />
-                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
-                    Click the button and choose your game window
-                  </span>
-                </li>
-                <li style={{ marginBottom: '0.75rem' }}>
-                  <strong style={{ color: '#60a5fa' }}>Position the View</strong>
-                  <br />
-                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
-                    Make sure all 24 cards (8×3 grid) are visible
-                  </span>
-                </li>
-                <li style={{ marginBottom: '0.75rem' }}>
-                  <strong style={{ color: '#60a5fa' }}>Start Recording</strong>
-                  <br />
-                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
-                    Begin recording before you start playing
-                  </span>
-                </li>
-                <li style={{ marginBottom: '0.75rem' }}>
-                  <strong style={{ color: '#60a5fa' }}>Play the Game</strong>
-                  <br />
-                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
-                    Reveal all cards naturally during gameplay
-                  </span>
-                </li>
-                <li style={{ marginBottom: '0.75rem' }}>
-                  <strong style={{ color: '#60a5fa' }}>Stop Recording</strong>
-                  <br />
-                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
-                    Once all cards are revealed, stop the recording
-                  </span>
-                </li>
-                <li>
-                  <strong style={{ color: '#60a5fa' }}>Wait for Results</strong>
-                  <br />
-                  <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
-                    The solver will analyze and show matching pairs
-                  </span>
-                </li>
+                {guideConfig.steps.map((step, index) => (
+                  <li key={index} style={{ marginBottom: index === guideConfig.steps.length - 1 ? 0 : '0.75rem' }}>
+                    <strong style={{ color: '#60a5fa' }}>{step.title}</strong>
+                    <br />
+                    <span style={{ fontSize: '0.85rem', color: 'rgba(255, 255, 255, 0.7)' }}>
+                      {step.description}
+                    </span>
+                  </li>
+                ))}
               </ol>
               
               <div style={{
@@ -352,25 +320,12 @@ export default function Home() {
                   color: 'rgba(147, 197, 253, 0.9)',
                   lineHeight: '1.5'
                 }}>
-                  💡 <strong>Tip:</strong> Record for at least 20-30 seconds to ensure all cards are captured clearly.
+                  {guideConfig.tip.icon} <strong>Tip:</strong> {guideConfig.tip.text}
                 </p>
               </div>
             </div>
           )}
         </div>
-        
-        <style jsx>{`
-          @keyframes slideIn {
-            from {
-              opacity: 0;
-              transform: translateY(-10px);
-            }
-            to {
-              opacity: 1;
-              transform: translateY(0);
-            }
-          }
-        `}</style>
 
         <header className="header">
           <h1 className="title">มินิเกมส์ เทพเจ้าดอจ</h1>
@@ -549,13 +504,6 @@ export default function Home() {
               </div>
             )}
 
-            <style jsx>{`
-              @keyframes shimmer {
-                0% { transform: translateX(-100%); }
-                100% { transform: translateX(100%); }
-              }
-            `}</style>
-
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
               {!streamActive ? (
                 <button className="button" onClick={initCapture} disabled={loading}>
@@ -582,21 +530,6 @@ export default function Home() {
                 </>
               )}
             </div>
-
-            <style jsx>{`
-              .record-dot {
-                width: 8px;
-                height: 8px;
-                background: white;
-                border-radius: 50%;
-                animation: pulse 1s infinite;
-              }
-              @keyframes pulse {
-                0% { opacity: 1; transform: scale(1); }
-                50% { opacity: 0.5; transform: scale(1.2); }
-                100% { opacity: 1; transform: scale(1); }
-              }
-            `}</style>
 
             {error && (
               <div style={{ color: '#f87171', textAlign: 'center', background: 'rgba(248, 113, 113, 0.1)', padding: '1rem', borderRadius: '0.5rem', width: '100%' }}>
@@ -639,6 +572,35 @@ export default function Home() {
           </>
         )}
       </div>
+      
+      <style jsx>{`
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        @keyframes shimmer {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+        @keyframes pulse {
+          0% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.5; transform: scale(1.2); }
+          100% { opacity: 1; transform: scale(1); }
+        }
+        .record-dot {
+          width: 8px;
+          height: 8px;
+          background: white;
+          border-radius: 50%;
+          animation: pulse 1s infinite;
+        }
+      `}</style>
     </main>
   );
 }
