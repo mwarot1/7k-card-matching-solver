@@ -4,10 +4,16 @@ import json
 import os
 import time
 from typing import List, Tuple, Dict, Optional, Callable
-from PIL import ImageGrab, Image
-import win32gui
-import win32ui
-import win32con
+try:
+    from PIL import ImageGrab
+    import win32gui
+    import win32ui
+    import win32con
+except ImportError:
+    # These are only needed for desktop live capture, not for the web API
+    pass
+
+from PIL import Image
 from matching import load_locations_from_json
 
 class FrameBuffer:
