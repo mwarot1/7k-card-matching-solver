@@ -59,11 +59,21 @@ async def solve_video(file: UploadFile = File(...)):
     cap.release()
 
     # Solve logic
-    # We'll need a way to capture the output without GUI dependencies
-    # For now, let's just return the pairs
     solver.solve_frames(captured_frames, lambda x: print(f"API Progress: {x}"))
     pairs = solver.find_pairs()
     
+    # Prepare results with base64 images
+    import base64
+    grid_faces = {}
+    for i in range(24):
+        if i in solver.card_faces:
+            face = solver.card_faces[i]
+            _, buffer = cv2.imencode('.png', face)
+            encoded = base64.b64encode(buffer).decode('utf-8')
+            grid_faces[str(i)] = f"data:image/png;base64,{encoded}"
+        else:
+            grid_faces[str(i)] = None
+
     # Cleanup file
     os.remove(file_path)
     
@@ -71,6 +81,7 @@ async def solve_video(file: UploadFile = File(...)):
         "session_id": session_id,
         "pairs_count": len(pairs),
         "pairs": pairs,
+        "grid_faces": grid_faces,
         "status": "success" if len(pairs) == 12 else "partial"
     }
 
