@@ -6,6 +6,7 @@ interface SolveResult {
   session_id: string;
   pairs_count: number;
   pairs: [number, number][];
+  grid_faces: Record<string, string | null>;
   status: string;
 }
 
@@ -148,15 +149,22 @@ export default function Home() {
     });
 
     return (
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(8, 1fr)' }}>
-        {cardMap.map((pairNum, cardIdx) => (
-          <div key={cardIdx} className={`card-item ${pairNum ? 'matched' : ''}`}>
-            {pairNum && <div className="pair-badge">{pairNum}</div>}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-              {cardIdx}
+      <div className="grid" style={{ gridTemplateColumns: 'repeat(8, 1fr)', maxWidth: '900px', margin: '0 auto' }}>
+        {cardMap.map((pairNum, cardIdx) => {
+          const faceUrl = result.grid_faces[cardIdx.toString()];
+          return (
+            <div key={cardIdx} className={`card-item ${pairNum ? 'matched' : ''}`}>
+              {pairNum && <div className="pair-badge">{pairNum}</div>}
+              {faceUrl ? (
+                <img src={faceUrl} alt={`Card ${cardIdx}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+                  {cardIdx}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
