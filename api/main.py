@@ -69,6 +69,12 @@ async def solve_video(file: UploadFile = File(...)):
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     debug_faces_dir = os.path.join(base_dir, "debug_faces")
     
+    print(f"DEBUG: base_dir: {base_dir}")
+    if os.path.exists(debug_faces_dir):
+        print(f"DEBUG: files in debug_faces: {os.listdir(debug_faces_dir)}")
+    else:
+        print(f"DEBUG: debug_faces_dir does not exist at {debug_faces_dir}")
+    
     for i in range(24):
         face_path = os.path.join(debug_faces_dir, f"face_{i}.png")
         if os.path.exists(face_path):
