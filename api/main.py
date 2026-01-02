@@ -66,26 +66,31 @@ async def solve_video(file: UploadFile = File(...)):
     import base64
     grid_faces = {}
     # base_dir should be the project root (parent of the api folder)
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    api_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(api_dir)
     debug_faces_dir = os.path.join(base_dir, "debug_faces")
     
+    print(f"DEBUG: api_dir: {api_dir}")
     print(f"DEBUG: base_dir: {base_dir}")
-    if os.path.exists(debug_faces_dir):
-        print(f"DEBUG: files in debug_faces: {os.listdir(debug_faces_dir)}")
-    else:
-        print(f"DEBUG: debug_faces_dir does not exist at {debug_faces_dir}")
+    print(f"DEBUG: debug_faces_dir: {debug_faces_dir}")
+    print(f"DEBUG: exists: {os.path.exists(debug_faces_dir)}")
     
     for i in range(24):
         face_path = os.path.join(debug_faces_dir, f"face_{i}.png")
         if os.path.exists(face_path):
-            with open(face_path, "rb") as f:
-                encoded = base64.b64encode(f.read()).decode('utf-8')
-                grid_faces[str(i)] = f"data:image/png;base64,{encoded}"
-                print(f"DEBUG: Read face_{i}.png from disk")
+            try:
+                with open(face_path, "rb") as f:
+                    encoded = base64.b64encode(f.read()).decode('utf-8')
+                    grid_faces[str(i)] = f"data:image/png;base64,{encoded}"
+                    if i % 8 == 0:
+                        print(f"DEBUG: Read face_{i}.png (len: {len(encoded)})")
+            except Exception as e:
+                print(f"DEBUG: Error reading face_{i}: {e}")
+                grid_faces[str(i)] = None
         else:
             grid_faces[str(i)] = None
 
-    print(f"DEBUG: Total grid_faces populated from disk: {len([f for f in grid_faces.values() if f is not None])}")
+    print(f"DEBUG: Total grid_faces: {len([f for f in grid_faces.values() if f is not None])}/24")
 
     # Convert pairs (tuples) to lists for clean JSON serialization
     json_pairs = [[int(p[0]), int(p[1])] for p in pairs]
