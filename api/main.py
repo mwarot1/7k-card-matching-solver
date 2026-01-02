@@ -1,0 +1,79 @@
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+import shutil
+import os
+import uuid
+from typing import List, Dict
+import cv2
+import numpy as np
+from solver import CardSolver
+
+app = FastAPI(title="CardSolverV3 API")
+
+# Enable CORS for frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+UPLOAD_DIR = "uploads"
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR)
+
+@app.get("/")
+async def root():
+    return {"message": "CardSolverV3 API is running"}
+
+@app.post("/solve")
+async def solve_video(file: UploadFile = File(...)):
+    session_id = str(uuid.uuid4())
+    file_path = os.path.join(UPLOAD_DIR, f"{session_id}_{file.filename}")
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    # Initialize solver
+    # Note: We'll need to ensure templates are available to the API
+    locations_path = "card_locations.json"
+    template_path = "7kMinigames/BackCard.png"
+    
+    solver = CardSolver(locations_path, file_path, template_path)
+    
+    # Process video
+    # We'll use a modified version of the video session for the API
+    cap = cv2.VideoCapture(file_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    captured_frames = []
+    frame_count = 0
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret: break
+        ts = frame_count / fps
+        if ts > 8.0: break # Use the 8s limit
+        h, w = frame.shape[:2]
+        captured_frames.append((ts, frame, (0, 0, w, h)))
+        frame_count += 1
+    cap.release()
+
+    # Solve logic
+    # We'll need a way to capture the output without GUI dependencies
+    # For now, let's just return the pairs
+    solver.solve_frames(captured_frames, lambda x: print(f"API Progress: {x}"))
+    pairs = solver.find_pairs()
+    
+    # Cleanup file
+    os.remove(file_path)
+    
+    return {
+        "session_id": session_id,
+        "pairs_count": len(pairs),
+        "pairs": pairs,
+        "status": "success" if len(pairs) == 12 else "partial"
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
