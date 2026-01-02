@@ -68,21 +68,27 @@ async def solve_video(file: UploadFile = File(...)):
     for i in range(24):
         if i in solver.card_faces:
             face = solver.card_faces[i]
-            _, buffer = cv2.imencode('.png', face)
-            encoded = base64.b64encode(buffer).decode('utf-8')
-            grid_faces[str(i)] = f"data:image/png;base64,{encoded}"
+            if face is not None:
+                _, buffer = cv2.imencode('.png', face)
+                encoded = base64.b64encode(buffer).decode('utf-8')
+                grid_faces[str(i)] = f"data:image/png;base64,{encoded}"
+            else:
+                grid_faces[str(i)] = None
         else:
             grid_faces[str(i)] = None
+
+    # Convert pairs (tuples) to lists for clean JSON serialization
+    json_pairs = [[int(p[0]), int(p[1])] for p in pairs]
 
     # Cleanup file
     os.remove(file_path)
     
     return {
         "session_id": session_id,
-        "pairs_count": len(pairs),
-        "pairs": pairs,
+        "pairs_count": len(json_pairs),
+        "pairs": json_pairs,
         "grid_faces": grid_faces,
-        "status": "success" if len(pairs) == 12 else "partial"
+        "status": "success" if len(json_pairs) == 12 else "partial"
     }
 
 if __name__ == "__main__":

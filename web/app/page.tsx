@@ -143,15 +143,27 @@ export default function Home() {
 
     // Create a flat array of 24 cards
     const cardMap = new Array(24).fill(null);
-    result.pairs.forEach((pair, pairIdx) => {
-      cardMap[pair[0]] = pairIdx + 1;
-      cardMap[pair[1]] = pairIdx + 1;
-    });
+    if (result.pairs) {
+      result.pairs.forEach((pair, pairIdx) => {
+        if (pair && pair.length >= 2) {
+          cardMap[Number(pair[0])] = pairIdx + 1;
+          cardMap[Number(pair[1])] = pairIdx + 1;
+        }
+      });
+    }
+
+    const faces = result.grid_faces || {};
 
     return (
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(8, 1fr)', maxWidth: '900px', margin: '0 auto' }}>
+      <div className="grid" style={{
+        gridTemplateColumns: 'repeat(8, 1fr)',
+        maxWidth: '900px',
+        width: '100%',
+        margin: '0 auto',
+        justifyContent: 'center'
+      }}>
         {cardMap.map((pairNum, cardIdx) => {
-          const faceUrl = result.grid_faces[cardIdx.toString()];
+          const faceUrl = faces[cardIdx.toString()];
           return (
             <div key={cardIdx} className={`card-item ${pairNum ? 'matched' : ''}`}>
               {pairNum && <div className="pair-badge">{pairNum}</div>}
