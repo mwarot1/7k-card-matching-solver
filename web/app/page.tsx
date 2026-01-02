@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { ClientSideSolver, SolveResult as ClientSolveResult } from '../utils/solver';
 
 interface SolveResult {
-  session_id: string;
+  session_id?: string;
   pairs_count: number;
   pairs: number[][];
   grid_faces: Record<string, string | null>;
   status: string;
+  cards_detected?: number;
 }
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -19,17 +21,38 @@ export default function Home() {
   const [isRecording, setIsRecording] = useState(false);
   const [streamActive, setStreamActive] = useState(false);
   const [duration, setDuration] = useState(0);
+  const [progress, setProgress] = useState<{current: number, total: number, stage: string, stepHistory?: Array<{step: string, duration: number}>} | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const solverRef = useRef<ClientSideSolver | null>(null);
 
-  // Stop timer on unmount
+  // Initialize solver
   useEffect(() => {
+    const solver = new ClientSideSolver((current, total, stage, stepHistory) => {
+      setProgress({current, total, stage, stepHistory});
+    });
+    // Wait for OpenCV to be ready
+    const checkCV = setInterval(() => {
+      if (window.cv && window.cv.Mat) {
+        clearInterval(checkCV);
+        const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+        solver.init(`${basePath}/templates/BackCard.png`).then(() => {
+          solverRef.current = solver;
+          console.log('Solver initialized');
+        }).catch(err => {
+          console.error('Failed to initialize solver:', err);
+          setError('Failed to initialize solver');
+        });
+      }
+    }, 500);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      clearInterval(checkCV);
+      if (solverRef.current) solverRef.current.dispose();
     };
   }, []);
 
@@ -114,31 +137,24 @@ export default function Home() {
   };
 
   const handleUpload = async (videoBlob: Blob) => {
+    if (!solverRef.current) {
+      setError('Solver not initialized. Please wait for OpenCV to load.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
-    const formData = new FormData();
-    formData.append('file', videoBlob, 'capture.webm');
+    setProgress({current: 0, total: 100, stage: 'Preparing...', stepHistory: []});
 
     try {
-      const response = await fetch(`${API_BASE_URL}/solve`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to solve video');
+      const data = await solverRef.current.solve(videoBlob);
+      setResult(data as SolveResult);
+      // Keep step history visible after completion
+      if (data.step_history) {
+        setProgress({current: 100, total: 100, stage: 'Complete', stepHistory: data.step_history});
       }
-
-      const data: SolveResult = await response.json();
-      console.log('DEBUG: Received data from API:', {
-        pairs_count: data.pairs_count,
-        has_grid_faces: !!data.grid_faces,
-        grid_faces_count: data.grid_faces ? Object.keys(data.grid_faces).length : 0,
-        populated_faces: data.grid_faces ? Object.values(data.grid_faces).filter(v => !!v).length : 0
-      });
-      setResult(data);
     } catch (err) {
+      console.error('Solve error:', err);
       setError(err instanceof Error ? err.message : 'An error occurred during solving');
     } finally {
       setLoading(false);
@@ -259,13 +275,135 @@ export default function Home() {
                   RECORDING: {duration}s
                 </div>
               )}
-              {loading && (
-                <div style={{ textAlign: 'center', position: 'absolute', zIndex: 10 }}>
-                  <div className="spinner" style={{ width: '40px', height: '40px', marginBottom: '1rem' }}></div>
-                  <p style={{ fontWeight: 600, textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>Analyzing patterns...</p>
-                </div>
-              )}
             </div>
+
+            {/* Large Progress Bar Below Video */}
+            {progress && (
+              <div style={{ width: '100%', marginTop: '1.5rem' }}>
+                <div style={{ 
+                  background: 'rgba(0,0,0,0.8)', 
+                  borderRadius: '1.5rem', 
+                  overflow: 'hidden',
+                  marginBottom: '1rem',
+                  border: '2px solid rgba(0,0,0,0.5)',
+                  boxShadow: '0 4px 6px rgba(0,0,0,0.5)'
+                }}>
+                  <div style={{ 
+                    height: '24px', 
+                    background: 'linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899)',
+                    width: `${Math.min((progress.current / progress.total) * 100, 100)}%`,
+                    transition: 'width 0.3s ease',
+                    borderRadius: '1.5rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    paddingRight: '1rem',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    boxShadow: '0 0 20px rgba(139, 92, 246, 0.6)'
+                  }}>
+                    <div style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
+                      animation: 'shimmer 2s infinite'
+                    }} />
+                    <span style={{ 
+                      fontSize: '0.85rem', 
+                      fontWeight: 700, 
+                      color: 'white',
+                      textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+                      position: 'relative',
+                      zIndex: 1
+                    }}>
+                      {Math.round((progress.current / progress.total) * 100)}%
+                    </span>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <p style={{ 
+                    fontSize: '1.1rem', 
+                    fontWeight: 600, 
+                    color: 'var(--text)',
+                    marginBottom: '0.25rem'
+                  }}>
+                    {progress.stage}
+                  </p>
+                  <p style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>
+                    {progress.current} / {progress.total} frames
+                  </p>
+                </div>
+                
+                {/* Step History and Upcoming Steps */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginTop: '1.5rem' }}>
+                  {['Extract frames', 'Detect cards', 'Find baseline', 'Extract faces', 'Match pairs'].map((stepName, idx) => {
+                    const completed = progress.stepHistory?.find(s => s.step === stepName);
+                    const isCurrent = progress.stage.toLowerCase().includes(stepName.toLowerCase().split(' ')[1] || stepName.toLowerCase());
+                    const isPending = !completed && !isCurrent;
+                    
+                    return (
+                      <div key={idx} style={{
+                        padding: '0.75rem',
+                        borderRadius: '0.5rem',
+                        background: completed ? 'rgba(34, 197, 94, 0.1)' : isCurrent ? 'rgba(59, 130, 246, 0.1)' : 'rgba(100, 116, 139, 0.05)',
+                        border: `1px solid ${completed ? 'rgba(34, 197, 94, 0.3)' : isCurrent ? 'rgba(59, 130, 246, 0.3)' : 'rgba(100, 116, 139, 0.1)'}`,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem'
+                      }}>
+                        <div style={{
+                          width: '24px',
+                          height: '24px',
+                          borderRadius: '50%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          background: completed ? '#22c55e' : isCurrent ? '#3b82f6' : 'rgba(100, 116, 139, 0.2)',
+                          fontSize: '0.75rem',
+                          fontWeight: 700,
+                          color: 'white',
+                          flexShrink: 0
+                        }}>
+                          {completed ? '✓' : isCurrent ? '...' : idx + 1}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ 
+                            fontSize: '0.85rem', 
+                            fontWeight: 600,
+                            color: completed ? '#22c55e' : isCurrent ? '#3b82f6' : 'var(--text-dim)',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis'
+                          }}>
+                            {stepName}
+                          </div>
+                          {completed && (
+                            <div style={{ fontSize: '0.7rem', color: 'rgba(34, 197, 94, 0.7)' }}>
+                              {(completed.duration / 1000).toFixed(1)}s
+                            </div>
+                          )}
+                          {isCurrent && (
+                            <div style={{ fontSize: '0.7rem', color: 'rgba(59, 130, 246, 0.7)' }}>
+                              In progress...
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <style jsx>{`
+              @keyframes shimmer {
+                0% { transform: translateX(-100%); }
+                100% { transform: translateX(100%); }
+              }
+            `}</style>
 
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
               {!streamActive ? (
@@ -318,12 +456,36 @@ export default function Home() {
         </section>
 
         {result && (
-          <section className="glass-card" style={{ marginTop: '2rem' }}>
-            <h2 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', color: 'var(--secondary)', textAlign: 'center' }}>
-              ผลลัพธ์
-            </h2>
-            {renderGrid()}
-          </section>
+          <>
+            {result.cards_detected !== undefined && result.cards_detected !== 24 && (
+              <section className="glass-card" style={{ marginTop: '2rem', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.3)' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem' }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#eab308" strokeWidth="2" style={{ flexShrink: 0, marginTop: '2px' }}>
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                  </svg>
+                  <div>
+                    <h3 style={{ color: '#eab308', marginBottom: '0.5rem', fontSize: '1.1rem', fontWeight: 600 }}>⚠️ Incomplete Grid Detection</h3>
+                    <p style={{ color: 'rgba(234, 179, 8, 0.9)', fontSize: '0.95rem', lineHeight: '1.5' }}>
+                      Only detected <strong>{result.cards_detected} cards</strong> instead of the expected 24 cards.
+                      This may result in incomplete or inaccurate pair matching.
+                    </p>
+                    <p style={{ color: 'rgba(234, 179, 8, 0.7)', fontSize: '0.85rem', marginTop: '0.5rem', fontStyle: 'italic' }}>
+                      💡 Tips: Ensure the entire grid is visible, adjust lighting, or try recording from a clearer angle.
+                    </p>
+                  </div>
+                </div>
+              </section>
+            )}
+            
+            <section className="glass-card" style={{ marginTop: '2rem' }}>
+              <h2 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', color: 'var(--secondary)', textAlign: 'center' }}>
+                ผลลัพธ์
+              </h2>
+              {renderGrid()}
+            </section>
+          </>
         )}
       </div>
     </main>
