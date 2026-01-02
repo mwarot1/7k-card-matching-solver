@@ -155,28 +155,41 @@ export default function Home() {
     const faces = result.grid_faces || {};
 
     return (
-      <div className="grid" style={{
-        gridTemplateColumns: 'repeat(8, 1fr)',
-        maxWidth: '900px',
-        width: '100%',
-        margin: '0 auto',
-        justifyContent: 'center'
-      }}>
-        {cardMap.map((pairNum, cardIdx) => {
-          const faceUrl = faces[cardIdx.toString()];
-          return (
-            <div key={cardIdx} className={`card-item ${pairNum ? 'matched' : ''}`}>
-              {pairNum && <div className="pair-badge">{pairNum}</div>}
-              {faceUrl ? (
-                <img src={faceUrl} alt={`Card ${cardIdx}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-                  {cardIdx}
-                </div>
-              )}
-            </div>
-          );
-        })}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', marginTop: '2rem' }}>
+        <div className="grid" style={{
+          gridTemplateColumns: 'repeat(8, 1fr)',
+          maxWidth: '850px',
+          width: '100%',
+          margin: '0 auto',
+          gap: '0.75rem'
+        }}>
+          {cardMap.map((pairNum, cardIdx) => {
+            const faceUrl = faces[cardIdx.toString()];
+            return (
+              <div
+                key={cardIdx}
+                className={`card-item ${pairNum ? 'matched' : ''}`}
+                style={{
+                  border: pairNum ? '2px solid var(--primary)' : '1px solid var(--glass-border)',
+                  boxShadow: pairNum ? '0 0 10px var(--primary-glow)' : 'none'
+                }}
+              >
+                {faceUrl ? (
+                  <img src={faceUrl} alt={`Card ${cardIdx}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    height: '100%',
+                    background: 'rgba(255,255,255,0.05)'
+                  }}>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   };

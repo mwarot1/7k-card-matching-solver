@@ -66,14 +66,19 @@ async def solve_video(file: UploadFile = File(...)):
     import base64
     grid_faces = {}
     for i in range(24):
-        if i in solver.card_faces:
-            face = solver.card_faces[i]
-            if face is not None:
-                _, buffer = cv2.imencode('.png', face)
-                encoded = base64.b64encode(buffer).decode('utf-8')
-                grid_faces[str(i)] = f"data:image/png;base64,{encoded}"
-            else:
-                grid_faces[str(i)] = None
+        # We only send the face if the solver actually detected a face (diff >= 30.0)
+        # We can check max_diffs if we pass it, or just check solver.card_faces
+        # Looking at solver.py, max_diffs is local to solve_frames.
+        # However, solver.card_faces is only updated in _process_frame_for_faces if a NEW max is found.
+        # Let's verify if we can access the max_diffs or just trust card_faces.
+        # Actually, let's just send what we have in card_faces but maybe the user wants 
+        # specifically those that would have been saved to debug_faces/
+        
+        face = solver.card_faces.get(i)
+        if face is not None:
+            _, buffer = cv2.imencode('.png', face)
+            encoded = base64.b64encode(buffer).decode('utf-8')
+            grid_faces[str(i)] = f"data:image/png;base64,{encoded}"
         else:
             grid_faces[str(i)] = None
 
