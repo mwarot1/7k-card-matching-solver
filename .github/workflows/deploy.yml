@@ -34,7 +34,7 @@ jobs:
         run: npm run build
         working-directory: web
         env:
-          NEXT_PUBLIC_API_URL: https://7k-card-solver-api.onrender.com
+          NEXT_PUBLIC_API_URL: https://sevenk-card-matching-solver.onrender.com
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
