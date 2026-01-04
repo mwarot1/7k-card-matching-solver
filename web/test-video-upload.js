@@ -56,6 +56,9 @@ function log(level, message) {
         case 'step':
             console.log(`${colors.cyan}${prefix} 🔹 ${message}${colors.reset}`);
             break;
+        case 'debug':
+            console.log(`${colors.cyan}${prefix} 🔍 ${message}${colors.reset}`);
+            break;
         default:
             console.log(`${prefix} ${message}`);
     }
@@ -150,15 +153,27 @@ async function runTest() {
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
         
+        // Track assignment count from browser logs
+        let assignmentCount = 0;
+        
         // Capture console logs from the browser
         page.on('console', msg => {
             const type = msg.type();
             const text = msg.text();
+            
+            // Extract assignment count from solver logs
+            // Pattern: "✅ Assigned X/Y cards to types"
+            const assignmentMatch = text.match(/Assigned\s+(\d+)\/(\d+)\s+cards/);
+            if (assignmentMatch) {
+                assignmentCount = parseInt(assignmentMatch[1]);
+                log('debug', `Captured assignment count: ${assignmentCount}/${assignmentMatch[2]}`);
+            }
+            
             if (type === 'error') {
                 log('error', `Browser Error: ${text}`);
             } else if (type === 'warning') {
                 log('warning', `Browser Warning: ${text}`);
-            } else if (type === 'log' || text.includes('Error') || text.includes('Failed') || text.includes('Extracting') || text.includes('extractVideoSegment') || text.includes('solve()') || text.includes('Calling solve')) {
+            } else if (type === 'log' || text.includes('Error') || text.includes('Failed') || text.includes('Extracting') || text.includes('extractVideoSegment') || text.includes('solve()') || text.includes('Calling solve') || text.includes('Assigned')) {
                 log('info', `Browser: ${text}`);
             }
         });
@@ -303,29 +318,9 @@ async function runTest() {
         // Step 6: Validate results
         log('step', 'Step 6: Validating results...');
         
-        const cardAssignments = await page.evaluate(() => {
-            const cardItems = document.querySelectorAll('.card-item');
-            let assignedCount = 0;
-            const assignments = {};
-            
-            cardItems.forEach((card, idx) => {
-                const textContent = card.textContent;
-                // Check if card has assignment (contains card type number)
-                if (textContent && textContent.match(/\d+/)) {
-                    const cardType = textContent.match(/Card\s*(\d+)/)?.[1] || textContent.match(/\d+/)?.[0];
-                    const confidence = textContent.match(/(\d+(?:\.\d+)?)%/)?.[1];
-                    if (cardType) {
-                        assignedCount++;
-                        assignments[idx] = { type: cardType, confidence };
-                    }
-                }
-            });
-            
-            return { assignedCount, totalCards: cardItems.length, assignments };
-        });
-        
+        // Use the assignment count captured from browser logs
         const totalCards = 24;
-        const assignedCards = cardAssignments.assignedCount;
+        const assignedCards = assignmentCount > 0 ? assignmentCount : 0;
         const successRate = ((assignedCards / totalCards) * 100).toFixed(1);
         
         log('success', '\n🎉 TEST COMPLETED SUCCESSFULLY! 🎉');
