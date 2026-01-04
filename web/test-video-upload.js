@@ -237,12 +237,11 @@ async function runTest() {
         log('step', 'Step 5: Processing video...');
         log('warning', 'This may take a while depending on video complexity');
         
-        let lastProgress = '';
         const startTime = Date.now();
         
         // Monitor progress with timeout
         try {
-            const result = await Promise.race([
+            await Promise.race([
                 // Monitor for results
                 page.waitForFunction(() => {
                     const resultSection = document.querySelector('.glass-card h2');
