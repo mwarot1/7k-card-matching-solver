@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { ClientSideSolver, SolveResult as ClientSolveResult } from '../utils/solver';
 import guideConfig from '../config/guide.json';
 
 interface SolveResult {
   session_id?: string;
   pairs_count: number;
-  pairs: number[][];
+  card_assignments: Record<number, {cardType: number, confidence: number} | null>;
   grid_faces: Record<string, string | null>;
   status: string;
   cards_detected?: number;
@@ -24,8 +24,17 @@ export default function Home() {
   const [duration, setDuration] = useState(0);
   const [progress, setProgress] = useState<{current: number, total: number, stage: string, stepHistory?: Array<{step: string, duration: number}>} | null>(null);
   const [showGuide, setShowGuide] = useState(true);
+  const [uploadedVideo, setUploadedVideo] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoDuration, setVideoDuration] = useState<number>(0);
+  const [rangeStart, setRangeStart] = useState<number>(0);
+  const [rangeEnd, setRangeEnd] = useState<number>(0);
+  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [showCardLabels, setShowCardLabels] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const uploadVideoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -100,7 +109,15 @@ export default function Home() {
 
       recorder.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: 'video/webm' });
-        handleUpload(blob);
+        // Convert recorded blob to File and treat it like an uploaded video
+        const file = new File([blob], 'screen-recording.webm', { type: 'video/webm' });
+        setUploadedVideo(file);
+        const url = URL.createObjectURL(blob);
+        setVideoUrl(url);
+        setError(null);
+        setResult(null);
+        // Stop the capture stream
+        stopCapture();
       };
 
       recorder.start();
@@ -162,22 +179,129 @@ export default function Home() {
     }
   };
 
-  // Helper to map 0-23 indices to an 8x3 grid representation
+  const handleVideoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && file.type.startsWith('video/')) {
+      setUploadedVideo(file);
+      const url = URL.createObjectURL(file);
+      setVideoUrl(url);
+      setError(null);
+      setResult(null);
+    } else {
+      setError('Please select a valid video file');
+    }
+  };
+
+  const handleVideoLoaded = () => {
+    if (uploadVideoRef.current) {
+      const duration = uploadVideoRef.current.duration;
+      setVideoDuration(duration);
+      setRangeEnd(duration);
+    }
+  };
+
+  const handlePlayPause = () => {
+    if (uploadVideoRef.current) {
+      if (isPlaying) {
+        uploadVideoRef.current.pause();
+        setIsPlaying(false);
+      } else {
+        // Start playing from range start if not in range
+        if (uploadVideoRef.current.currentTime < rangeStart || uploadVideoRef.current.currentTime > rangeEnd) {
+          uploadVideoRef.current.currentTime = rangeStart;
+        }
+        uploadVideoRef.current.play();
+        setIsPlaying(true);
+      }
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (uploadVideoRef.current) {
+      const time = uploadVideoRef.current.currentTime;
+      setCurrentTime(time);
+      
+      // Loop within range when playing
+      if (isPlaying && time >= rangeEnd) {
+        uploadVideoRef.current.currentTime = rangeStart;
+      }
+    }
+  };
+
+  const seekTo = (time: number) => {
+    if (uploadVideoRef.current) {
+      uploadVideoRef.current.currentTime = time;
+      setCurrentTime(time);
+    }
+  };
+
+  // Update frame previews when range changes
+  useEffect(() => {
+    if (!uploadVideoRef.current || !uploadedVideo) return;
+
+    const video = uploadVideoRef.current;
+    
+    // Debounce to avoid conflicts with slider seeking
+    const timeoutId = setTimeout(() => {
+      if (!video || video.readyState < 1) return;
+
+      // Capture frames without affecting main video playback
+      const captureFrame = (time: number, canvasId: string) => {
+        const tempVideo = document.createElement('video');
+        tempVideo.src = videoUrl || '';
+        tempVideo.currentTime = time;
+        
+        tempVideo.onseeked = () => {
+          const canvas = document.getElementById(canvasId) as HTMLCanvasElement;
+          if (canvas) {
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              canvas.width = tempVideo.videoWidth;
+              canvas.height = tempVideo.videoHeight;
+              ctx.drawImage(tempVideo, 0, 0);
+            }
+          }
+          tempVideo.remove();
+        };
+      };
+
+      captureFrame(rangeStart, 'start-frame-canvas');
+      captureFrame(rangeEnd, 'end-frame-canvas');
+    }, 500); // Debounce 500ms
+
+    return () => clearTimeout(timeoutId);
+  }, [rangeStart, rangeEnd, uploadedVideo, videoUrl]);
+
+  const extractVideoSegment = useCallback(async () => {
+    if (!uploadedVideo || !solverRef.current) return;
+    
+    console.log(`extractVideoSegment called with rangeStart=${rangeStart}, rangeEnd=${rangeEnd}`);
+    
+    setLoading(true);
+    setError(null);
+    setProgress({current: 0, total: 100, stage: 'Preparing...', stepHistory: []});
+
+    try {
+      console.log(`Calling solve(uploadedVideo, ${rangeStart}, ${rangeEnd})`);
+      const data = await solverRef.current.solve(uploadedVideo, rangeStart, rangeEnd);
+      setResult(data as SolveResult);
+      if (data.step_history) {
+        setProgress({current: 100, total: 100, stage: 'Complete', stepHistory: data.step_history});
+      }
+    } catch (err) {
+      console.error('Solve error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to process video');
+    } finally {
+      setLoading(false);
+    }
+  }, [uploadedVideo, rangeStart, rangeEnd]);
+
+  // Helper to render card grid with assigned types
   const renderGrid = () => {
     if (!result) return null;
 
-    // Create a flat array of 24 cards
-    const cardMap = new Array(24).fill(null);
-    if (result.pairs) {
-      result.pairs.forEach((pair, pairIdx) => {
-        if (pair && pair.length >= 2) {
-          cardMap[Number(pair[0])] = pairIdx + 1;
-          cardMap[Number(pair[1])] = pairIdx + 1;
-        }
-      });
-    }
-
     const faces = result.grid_faces || {};
+    const assignments = result.card_assignments || {};
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', marginTop: '2rem' }}>
@@ -188,15 +312,34 @@ export default function Home() {
           margin: '0 auto',
           gap: '0.75rem'
         }}>
-          {cardMap.map((pairNum, cardIdx) => {
+          {Array.from({length: 24}, (_, cardIdx) => {
             const faceUrl = faces[cardIdx.toString()];
+            const assignment = assignments[cardIdx];
+            
+            // Determine color based on confidence
+            let borderColor = '1px solid var(--glass-border)';
+            let boxShadow = 'none';
+            if (assignment) {
+              if (assignment.confidence > 0.7) {
+                borderColor = '2px solid #10b981'; // Green - high confidence
+                boxShadow = '0 0 10px rgba(16, 185, 129, 0.3)';
+              } else if (assignment.confidence > 0.5) {
+                borderColor = '2px solid #f59e0b'; // Yellow - medium confidence
+                boxShadow = '0 0 10px rgba(245, 158, 11, 0.3)';
+              } else {
+                borderColor = '2px solid #ef4444'; // Red - low confidence
+                boxShadow = '0 0 10px rgba(239, 68, 68, 0.3)';
+              }
+            }
+            
             return (
               <div
                 key={cardIdx}
-                className={`card-item ${pairNum ? 'matched' : ''}`}
+                className="card-item"
                 style={{
-                  border: pairNum ? '2px solid var(--primary)' : '1px solid var(--glass-border)',
-                  boxShadow: pairNum ? '0 0 10px var(--primary-glow)' : 'none'
+                  border: borderColor,
+                  boxShadow: boxShadow,
+                  position: 'relative'
                 }}
               >
                 {faceUrl ? (
@@ -209,6 +352,35 @@ export default function Home() {
                     height: '100%',
                     background: 'rgba(255,255,255,0.05)'
                   }}>
+                  </div>
+                )}
+                {assignment && showCardLabels && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '4px',
+                    left: '4px',
+                    background: 'rgba(0, 0, 0, 0.75)',
+                    color: 'white',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    fontSize: '12px',
+                    fontWeight: 'bold'
+                  }}>
+                    #{assignment.cardType}
+                  </div>
+                )}
+                {assignment && showCardLabels && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: '4px',
+                    right: '4px',
+                    background: 'rgba(0, 0, 0, 0.75)',
+                    color: 'white',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    fontSize: '10px'
+                  }}>
+                    {(assignment.confidence * 100).toFixed(0)}%
                   </div>
                 )}
               </div>
@@ -335,7 +507,7 @@ export default function Home() {
         <section className="glass-card">
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2rem' }}>
 
-            {/* Live Preview / Status */}
+            {/* Video Preview */}
             <div style={{
               width: '100%',
               aspectRatio: '16/9',
@@ -348,20 +520,34 @@ export default function Home() {
               position: 'relative',
               border: '1px solid var(--glass-border)'
             }}>
+              {/* Screen Recording Video */}
               <video
                 ref={videoRef}
                 autoPlay
                 muted
                 style={{ width: '100%', height: '100%', objectFit: 'contain', display: streamActive ? 'block' : 'none' }}
               />
-              {!streamActive && !loading && (
+              
+              {/* Uploaded Video */}
+              {videoUrl && uploadedVideo && !streamActive && (
+                <video
+                  ref={uploadVideoRef}
+                  src={videoUrl}
+                  onLoadedMetadata={handleVideoLoaded}
+                  onTimeUpdate={handleTimeUpdate}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                />
+              )}
+              
+              {!streamActive && !uploadedVideo && !loading && (
                 <div style={{ textAlign: 'center', padding: '2rem' }}>
-                  <p style={{ color: 'var(--text-dim)', marginBottom: '1rem' }}>Ready to capture your game window</p>
+                  <p style={{ color: 'var(--text-dim)', marginBottom: '1rem' }}>Upload a video or capture your game window</p>
                   <p style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.4)' }}>
-                    Select the window where the game is running
+                    Choose your preferred method below
                   </p>
                 </div>
               )}
+              
               {isRecording && (
                 <div style={{
                   position: 'absolute',
@@ -382,6 +568,257 @@ export default function Home() {
                 </div>
               )}
             </div>
+
+            {/* Video Upload Controls - Show when video is uploaded */}
+            {videoUrl && uploadedVideo && !streamActive && (
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                  <button
+                    onClick={handlePlayPause}
+                    className="button"
+                    style={{ padding: '0.5rem 1rem' }}
+                  >
+                    {isPlaying ? '⏸' : '▶'}
+                  </button>
+                  <div style={{ flex: 1, fontSize: '0.9rem', color: 'var(--text-dim)' }}>
+                    {currentTime.toFixed(1)}s / {videoDuration.toFixed(1)}s
+                  </div>
+                </div>
+
+                {/* Dual Range Selector with Frame Preview */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {/* Input Fields on Left and Right */}
+                  <div style={{ display: 'flex', gap: '1rem', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <label style={{ fontSize: '0.9rem', color: 'var(--text)' }}>Start:</label>
+                      <input
+                        type="number"
+                        id="start-time-input"
+                        min="0"
+                        max={videoDuration}
+                        step="0.1"
+                        value={rangeStart.toFixed(1)}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const clamped = Math.max(0, Math.min(val, videoDuration));
+                          setRangeStart(clamped);
+                          if (clamped > rangeEnd) setRangeEnd(clamped);
+                        }}
+                        onFocus={(e) => e.target.style.borderColor = 'rgba(59, 130, 246, 0.6)'}
+                        onBlur={(e) => e.target.style.borderColor = 'rgba(255, 255, 255, 0.2)'}
+                        style={{
+                          width: '80px',
+                          padding: '0.5rem 0.75rem',
+                          textAlign: 'center',
+                          border: '1px solid rgba(255, 255, 255, 0.2)',
+                          borderRadius: '0.375rem',
+                          backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                          color: 'var(--text)',
+                          fontSize: '0.875rem',
+                          fontWeight: '500',
+                          outline: 'none',
+                          transition: 'all 0.2s ease',
+                          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
+                        }}
+                      />
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>s</span>
+                    </div>
+
+                    <div style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-dim)' }}>
+                      Duration: {(rangeEnd - rangeStart).toFixed(1)}s
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <label style={{ fontSize: '0.9rem', color: 'var(--text)' }}>End:</label>
+                      <input
+                        type="number"
+                        id="end-time-input"
+                        min="0"
+                        max={videoDuration}
+                        step="0.1"
+                        value={rangeEnd.toFixed(1)}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const clamped = Math.max(0, Math.min(val, videoDuration));
+                          setRangeEnd(clamped);
+                          if (clamped < rangeStart) setRangeStart(clamped);
+                        }}
+                        onFocus={(e) => e.target.style.borderColor = 'rgba(59, 130, 246, 0.6)'}
+                        onBlur={(e) => e.target.style.borderColor = 'rgba(255, 255, 255, 0.2)'}
+                        style={{
+                          width: '80px',
+                          padding: '0.5rem 0.75rem',
+                          textAlign: 'center',
+                          border: '1px solid rgba(255, 255, 255, 0.2)',
+                          borderRadius: '0.375rem',
+                          backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                          color: 'var(--text)',
+                          fontSize: '0.875rem',
+                          fontWeight: '500',
+                          outline: 'none',
+                          transition: 'all 0.2s ease',
+                          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
+                        }}
+                      />
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>s</span>
+                    </div>
+                  </div>
+
+                  {/* Dual Range Slider */}
+                  <div style={{ position: 'relative', paddingTop: '0.5rem', paddingBottom: '0.5rem' }}>
+                    {/* Track background */}
+                    <div style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: '0',
+                      right: '0',
+                      height: '6px',
+                      background: 'rgba(255, 255, 255, 0.1)',
+                      borderRadius: '3px',
+                      transform: 'translateY(-50%)',
+                      pointerEvents: 'none'
+                    }} />
+                    
+                    {/* Selected range highlight */}
+                    <div style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: `${(rangeStart / videoDuration) * 100}%`,
+                      right: `${100 - (rangeEnd / videoDuration) * 100}%`,
+                      height: '6px',
+                      background: 'rgba(59, 130, 246, 0.6)',
+                      borderRadius: '3px',
+                      transform: 'translateY(-50%)',
+                      pointerEvents: 'none'
+                    }} />
+
+                    {/* Start slider */}
+                    <input
+                      type="range"
+                      min="0"
+                      max={videoDuration}
+                      step="0.1"
+                      value={rangeStart}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        if (val <= rangeEnd) {
+                          setRangeStart(val);
+                          seekTo(val);
+                        }
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '24px',
+                        zIndex: 4,
+                        appearance: 'none',
+                        WebkitAppearance: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer'
+                      }}
+                    />
+
+                    {/* End slider */}
+                    <input
+                      type="range"
+                      min="0"
+                      max={videoDuration}
+                      step="0.1"
+                      value={rangeEnd}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        if (val >= rangeStart) {
+                          setRangeEnd(val);
+                          seekTo(val);
+                        }
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '24px',
+                        zIndex: 5,
+                        appearance: 'none',
+                        WebkitAppearance: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer'
+                      }}
+                    />
+                  </div>
+
+                  {/* Frame Preview Section */}
+                  <div style={{
+                    display: 'flex',
+                    gap: '1rem',
+                    padding: '1rem',
+                    background: 'rgba(0, 0, 0, 0.4)',
+                    borderRadius: '0.75rem',
+                    border: '1px solid rgba(59, 130, 246, 0.2)'
+                  }}>
+                    {/* Start Frame */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', fontWeight: '500' }}>Start Frame</div>
+                      <div style={{
+                        position: 'relative',
+                        width: '100%',
+                        paddingBottom: '56.25%',
+                        background: 'rgba(0, 0, 0, 0.5)',
+                        borderRadius: '0.5rem',
+                        overflow: 'hidden',
+                        border: '1px solid rgba(255, 255, 255, 0.1)'
+                      }}>
+                        <canvas
+                          id="start-frame-canvas"
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'contain'
+                          }}
+                        />
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textAlign: 'center' }}>
+                        {rangeStart.toFixed(2)}s
+                      </div>
+                    </div>
+
+                    {/* End Frame */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', fontWeight: '500' }}>End Frame</div>
+                      <div style={{
+                        position: 'relative',
+                        width: '100%',
+                        paddingBottom: '56.25%',
+                        background: 'rgba(0, 0, 0, 0.5)',
+                        borderRadius: '0.5rem',
+                        overflow: 'hidden',
+                        border: '1px solid rgba(255, 255, 255, 0.1)'
+                      }}>
+                        <canvas
+                          id="end-frame-canvas"
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'contain'
+                          }}
+                        />
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textAlign: 'center' }}>
+                        {rangeEnd.toFixed(2)}s
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Large Progress Bar Below Video */}
             {progress && (
@@ -445,9 +882,9 @@ export default function Home() {
                 
                 {/* Step History and Upcoming Steps */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginTop: '1.5rem' }}>
-                  {['Extract frames', 'Detect cards', 'Find baseline', 'Extract faces', 'Match pairs'].map((stepName, idx) => {
+                  {['Extract frames', 'Detect cards', 'Assign card types', 'Extract faces'].map((stepName, idx) => {
                     const completed = progress.stepHistory?.find(s => s.step === stepName);
-                    const isCurrent = progress.stage.toLowerCase().includes(stepName.toLowerCase().split(' ')[1] || stepName.toLowerCase());
+                    const isCurrent = progress.stage.toLowerCase().includes(stepName.toLowerCase().split(' ')[0] || stepName.toLowerCase());
                     const isPending = !completed && !isCurrent;
                     
                     return (
@@ -505,10 +942,38 @@ export default function Home() {
             )}
 
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-              {!streamActive ? (
+              {/* File Upload Input */}
+              <input
+                type="file"
+                accept="video/*"
+                onChange={handleVideoFileChange}
+                style={{ display: 'none' }}
+                id="video-upload"
+              />
+              <label htmlFor="video-upload" className="button" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                Upload Video
+              </label>
+              
+              {!streamActive && !uploadedVideo ? (
                 <button className="button" onClick={initCapture} disabled={loading}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-                  Select Game Window
+                  Capture Screen
+                </button>
+              ) : uploadedVideo && !streamActive ? (
+                <button
+                  onClick={extractVideoSegment}
+                  disabled={loading || rangeEnd <= rangeStart}
+                  className="button"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  Process Video
                 </button>
               ) : (
                 <>
@@ -564,9 +1029,47 @@ export default function Home() {
             )}
             
             <section className="glass-card" style={{ marginTop: '2rem' }}>
-              <h2 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', color: 'var(--secondary)', textAlign: 'center' }}>
-                ผลลัพธ์
-              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+                <h2 style={{ fontSize: '1.5rem', color: 'var(--secondary)', margin: 0 }}>
+                  ผลลัพธ์
+                </h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <span style={{ fontSize: '0.9rem', color: 'var(--text)', fontWeight: 500 }}>Labels</span>
+                  <button
+                    onClick={() => setShowCardLabels(!showCardLabels)}
+                    className="toggle-switch"
+                    style={{
+                      position: 'relative',
+                      width: '50px',
+                      height: '28px',
+                      background: showCardLabels ? 'var(--primary-glow)' : 'rgba(100, 116, 139, 0.3)',
+                      border: 'none',
+                      borderRadius: '14px',
+                      cursor: 'pointer',
+                      padding: 0,
+                      transition: 'background 0.3s ease',
+                      display: 'flex',
+                      alignItems: 'center',
+                      boxShadow: showCardLabels ? '0 0 12px rgba(124, 58, 237, 0.4)' : 'none'
+                    }}
+                    title="Toggle Labels"
+                  >
+                    <div
+                      style={{
+                        position: 'absolute',
+                        width: '22px',
+                        height: '22px',
+                        background: 'white',
+                        borderRadius: '50%',
+                        top: '3px',
+                        left: showCardLabels ? '25px' : '3px',
+                        transition: 'left 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)'
+                      }}
+                    />
+                  </button>
+                </div>
+              </div>
               {renderGrid()}
             </section>
           </>
