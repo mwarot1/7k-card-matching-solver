@@ -17,7 +17,7 @@ export interface Rect {
 
 export interface SolveResult {
     pairs_count: number;
-    pairs: [number, number][];
+    card_assignments: Record<number, {cardType: number, confidence: number} | null>;
     grid_faces: Record<string, string | null>;
     status: string;
     cards_detected?: number;
@@ -35,6 +35,7 @@ declare global {
 export class ClientSideSolver {
     private cv: any;
     private backCardTemplate: any = null;
+    private referenceTemplates: Map<number, any> = new Map();
     private locations: Point[][] = [];
     private cardFaces: Map<number, any> = new Map();
     private progressCallback?: ProgressCallback;
@@ -47,19 +48,50 @@ export class ClientSideSolver {
     }
 
     /**
-     * Loads the back card template from a URL.
+     * Loads the back card template and reference face templates from URLs.
      */
     async init(templateUrl: string) {
         if (!this.cv) {
             throw new Error("OpenCV.js not loaded.");
         }
 
+        // Load back card template
         const img = await this.loadImage(templateUrl);
         const mat = this.cv.imread(img);
         this.backCardTemplate = new this.cv.Mat();
         this.cv.cvtColor(mat, this.backCardTemplate, this.cv.COLOR_RGBA2GRAY);
         mat.delete();
         console.log("ClientSideSolver: Template loaded successfully.");
+
+        // Load 12 reference face templates
+        for (let cardType = 1; cardType <= 12; cardType++) {
+            const refUrl = `/7k-card-matching-solver/templates/reference_faces/card_${cardType}.png`;
+            try {
+                const refImg = await this.loadImage(refUrl);
+                const refMat = this.cv.imread(refImg);
+                
+                // Preprocess: convert to grayscale, resize to 128x128, equalize histogram
+                const gray = new this.cv.Mat();
+                this.cv.cvtColor(refMat, gray, this.cv.COLOR_RGBA2GRAY);
+                const resized = new this.cv.Mat();
+                this.cv.resize(gray, resized, new this.cv.Size(128, 128));
+                const equalized = new this.cv.Mat();
+                this.cv.equalizeHist(resized, equalized);
+                
+                this.referenceTemplates.set(cardType, equalized);
+                
+                // Cleanup intermediate mats
+                refMat.delete();
+                gray.delete();
+                resized.delete();
+                
+                console.log(`Loaded reference template for card type ${cardType}`);
+            } catch (err) {
+                console.error(`Failed to load reference template ${cardType}:`, err);
+            }
+        }
+        
+        console.log(`Loaded ${this.referenceTemplates.size} reference templates.`);
     }
 
     private async loadImage(url: string): Promise<HTMLImageElement> {
@@ -113,7 +145,7 @@ export class ClientSideSolver {
     /**
      * Extracts frames from a video Blob at a specific interval.
      */
-    private async extractFramesFromBlob(videoBlob: Blob, fps: number = 10): Promise<{ ts: number, mat: any }[]> {
+    private async extractFramesFromBlob(videoBlob: Blob, fps: number = 10, startTime: number = 0, endTime?: number): Promise<{ ts: number, mat: any }[]> {
         return new Promise((resolve, reject) => {
             const video = document.createElement('video');
             video.src = URL.createObjectURL(videoBlob);
@@ -127,23 +159,47 @@ export class ClientSideSolver {
             video.onloadedmetadata = async () => {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
-                const duration = Math.min(video.duration, 30); // Extended to 30 seconds
+                
+                // Calculate the actual time range to extract
+                const videoEnd = Math.min(endTime && endTime > 0 ? endTime : video.duration, video.duration);
+                const videoStart = Math.max(0, Math.min(startTime, videoEnd));
+                const duration = Math.min(videoEnd - videoStart, 30); // Max 30 seconds
                 const interval = 1 / fps;
+                
+                console.log(`Extracting frames from ${videoStart}s to ${videoStart + duration}s (${duration}s duration) at ${fps} FPS`);
 
                 try {
-                    for (let ts = 0; ts < duration; ts += interval) {
+                    for (let offset = 0; offset < duration; offset += interval) {
+                        const ts = videoStart + offset;
+                        if (ts > videoEnd) break; // Safety check
+                        
                         video.currentTime = ts;
                         await new Promise(r => {
                             video.onseeked = r;
                         });
                         if (ctx) {
                             ctx.drawImage(video, 0, 0);
-                            const mat = this.cv.imread(canvas);
-                            frames.push({ ts, mat });
+                            try {
+                                const mat = this.cv.imread(canvas);
+                                if (!mat || mat.empty()) {
+                                    console.warn(`Frame at ${ts}s is empty, skipping`);
+                                    continue;
+                                }
+                                frames.push({ ts, mat });
+                            } catch (cvError) {
+                                console.error(`OpenCV error reading frame at ${ts}s:`, cvError);
+                                // Continue to next frame instead of failing completely
+                                continue;
+                            }
                         }
                     }
                     URL.revokeObjectURL(video.src);
-                    resolve(frames);
+                    if (frames.length === 0) {
+                        reject(new Error('No frames could be extracted from video'));
+                    } else {
+                        console.log(`Successfully extracted ${frames.length} frames`);
+                        resolve(frames);
+                    }
                 } catch (err) {
                     URL.revokeObjectURL(video.src);
                     reject(err);
@@ -312,16 +368,113 @@ export class ClientSideSolver {
     }
 
     /**
-     * Main solve method.
+     * Assigns card types to each detected position by matching against reference templates.
+     * @param frames Array of video frames
+     * @param rects Detected card rectangles
+     * @param stride Process every Nth frame (default: 2)
+     * @returns Map of position to best matching card type and confidence
      */
-    async solve(videoBlob: Blob): Promise<SolveResult> {
+    private async assignCardTypes(
+        frames: { ts: number, mat: any }[], 
+        rects: Rect[], 
+        stride: number = 2
+    ): Promise<Map<number, {cardType: number, confidence: number, frameIdx: number}>> {
+        const assignments = new Map<number, {cardType: number, confidence: number, frameIdx: number}>();
+        const gray = new this.cv.Mat();
+        
+        console.log(`\n🔍 Assigning card types for ${rects.length} positions using ${this.referenceTemplates.size} references...`);
+        
+        // For each card position
+        for (let pos = 0; pos < rects.length; pos++) {
+            const rect = rects[pos];
+            let bestMatch = { cardType: 0, confidence: 0, frameIdx: 0 };
+            
+            // Scan frames with stride
+            for (let frameIdx = 0; frameIdx < frames.length; frameIdx += stride) {
+                if (this.progressCallback && frameIdx % 10 === 0) {
+                    const progress = pos * frames.length + frameIdx;
+                    const total = rects.length * frames.length;
+                    this.progressCallback(
+                        Math.floor(progress / stride), 
+                        Math.floor(total / stride), 
+                        `Assigning cards`, 
+                        this.stepHistory
+                    );
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+                
+                try {
+                    // Extract ROI from frame
+                    this.cv.cvtColor(frames[frameIdx].mat, gray, this.cv.COLOR_RGBA2GRAY);
+                    const roi = gray.roi(new this.cv.Rect(rect.x, rect.y, rect.width, rect.height));
+                    
+                    // Resize and equalize to match reference preprocessing (128x128)
+                    const resized = new this.cv.Mat();
+                    this.cv.resize(roi, resized, new this.cv.Size(128, 128));
+                    const equalized = new this.cv.Mat();
+                    this.cv.equalizeHist(resized, equalized);
+                    
+                    // Compare against all 12 reference templates
+                    for (let cardType = 1; cardType <= 12; cardType++) {
+                        const refTemplate = this.referenceTemplates.get(cardType);
+                        if (!refTemplate) continue;
+                        
+                        const res = new this.cv.Mat();
+                        this.cv.matchTemplate(equalized, refTemplate, res, this.cv.TM_CCOEFF_NORMED);
+                        const score = res.data32F[0];
+                        
+                        if (score > bestMatch.confidence) {
+                            bestMatch = { cardType, confidence: score, frameIdx };
+                        }
+                        
+                        res.delete();
+                    }
+                    
+                    roi.delete();
+                    resized.delete();
+                    equalized.delete();
+                } catch (e) {
+                    console.warn(`Error processing position ${pos}, frame ${frameIdx}:`, e);
+                }
+                
+                // Early stopping: if we found a very high confidence match (>92%), stop scanning more frames
+                if (bestMatch.confidence > 0.92) {
+                    console.log(`  Position ${pos}: Early stop at confidence ${bestMatch.confidence.toFixed(3)}`);
+                    break;
+                }
+            }
+            
+            // Store best match if confidence exceeds threshold
+            const threshold = 0.5;
+            if (bestMatch.confidence > threshold) {
+                assignments.set(pos, bestMatch);
+                console.log(`  Position ${pos}: Card Type ${bestMatch.cardType} (confidence: ${bestMatch.confidence.toFixed(3)}, frame: ${bestMatch.frameIdx})`);
+            } else {
+                console.log(`  Position ${pos}: No match (best: ${bestMatch.confidence.toFixed(3)})`);
+            }
+        }
+        
+        gray.delete();
+        console.log(`✅ Assigned ${assignments.size}/${rects.length} positions\n`);
+        return assignments;
+    }
+
+    /**
+     * Main solve method.
+     * @param videoBlob The video blob to process
+     * @param startTime Optional start time in seconds (default: 0)
+     * @param endTime Optional end time in seconds (default: video duration)
+     */
+    async solve(videoBlob: Blob, startTime: number = 0, endTime?: number): Promise<SolveResult> {
+        console.log(`solve() called with startTime=${startTime}, endTime=${endTime}`);
+        
         if (!this.cv) throw new Error("OpenCV.js not initialized");
         
         this.stepHistory = [];
         
         // 1. Extract frames
         this.currentStepStart = Date.now();
-        const frames = await this.extractFramesFromBlob(videoBlob, 10);
+        const frames = await this.extractFramesFromBlob(videoBlob, 10, startTime, endTime);
         this.stepHistory.push({step: 'Extract frames', duration: Date.now() - this.currentStepStart});
 
         // 2. Detect card locations
@@ -332,7 +485,7 @@ export class ClientSideSolver {
         
         if (rects.length === 0) {
             frames.forEach(f => f.mat.delete());
-            return { pairs_count: 0, pairs: [], grid_faces: {}, status: "No cards detected", cards_detected: 0 };
+            return { pairs_count: 0, card_assignments: {}, grid_faces: {}, status: "No cards detected", cards_detected: 0 };
         }
 
         // Sort rects: top-to-bottom, then left-to-right
@@ -347,134 +500,53 @@ export class ClientSideSolver {
 
         console.log(`Detected and sorted ${rects.length} card locations.`);
 
-        // 3. Find baseline (frames where cards are face down)
+        // 3. Assign card types using reference templates
         this.currentStepStart = Date.now();
-        let baselineIdx = -1;
-        let stableCount = 0;
-        const gray = new this.cv.Mat();
-        
-        for (let i = 0; i < frames.length; i++) {
-            if (this.progressCallback && i % 5 === 0) {
-                this.progressCallback(Math.min(i + 1, frames.length), frames.length, 'Finding baseline', this.stepHistory);
-                // Yield to allow UI update
-                await new Promise(resolve => setTimeout(resolve, 0));
-            }
-            this.cv.cvtColor(frames[i].mat, gray, this.cv.COLOR_RGBA2GRAY);
-            let backCount = 0;
-            
-            for (const rect of rects) {
-                try {
-                    const roi = gray.roi(new this.cv.Rect(rect.x, rect.y, rect.width, rect.height));
-                    const resizedTemplate = new this.cv.Mat();
-                    this.cv.resize(this.backCardTemplate, resizedTemplate, new this.cv.Size(rect.width, rect.height));
-                    
-                    const res = new this.cv.Mat();
-                    this.cv.matchTemplate(roi, resizedTemplate, res, this.cv.TM_CCOEFF_NORMED);
-                    const score = res.data32F[0];
-                    
-                    if (score > 0.6) backCount++;
-                    
-                    roi.delete();
-                    resizedTemplate.delete();
-                    res.delete();
-                } catch (e) {
-                    console.warn('ROI error during baseline detection:', e);
-                }
-            }
+        const assignments = await this.assignCardTypes(frames, rects, 2);
+        this.stepHistory.push({step: 'Assign card types', duration: Date.now() - this.currentStepStart});
 
-            if (backCount >= 22) {
-                if (baselineIdx === -1) baselineIdx = i;
-                stableCount++;
-            } else {
-                if (baselineIdx !== -1 && stableCount >= 3) {
-                    // Found stable sequence, use middle of sequence
-                    baselineIdx = Math.floor((baselineIdx + (i - 1)) / 2);
-                    break;
-                }
-                baselineIdx = -1;
-                stableCount = 0;
-            }
-        }
-        
-        if (baselineIdx < 0) baselineIdx = 0;
-        this.stepHistory.push({step: 'Find baseline', duration: Date.now() - this.currentStepStart});
-
-        // 4. Extract faces
+        // 4. Extract faces from best matching frames
         this.currentStepStart = Date.now();
         const cardFaces = new Map<number, any>();
-        const maxDiffs = new Array(rects.length).fill(0);
         
-        const baselineFrameGray = new this.cv.Mat();
-        this.cv.cvtColor(frames[baselineIdx].mat, baselineFrameGray, this.cv.COLOR_RGBA2GRAY);
-        
-        const perCardBaselines: any[] = [];
-        for (const rect of rects) {
+        for (let pos = 0; pos < rects.length; pos++) {
+            const assignment = assignments.get(pos);
+            if (!assignment) continue;
+            
+            const rect = rects[pos];
+            const frameIdx = assignment.frameIdx;
+            
             try {
-                const baseline = baselineFrameGray.roi(new this.cv.Rect(rect.x, rect.y, rect.width, rect.height));
-                perCardBaselines.push(baseline.clone());
-                baseline.delete();
+                const faceRoi = frames[frameIdx].mat.roi(new this.cv.Rect(rect.x, rect.y, rect.width, rect.height));
+                cardFaces.set(pos, faceRoi.clone());
+                faceRoi.delete();
             } catch (e) {
-                console.warn('Error creating baseline ROI:', e);
-                perCardBaselines.push(null);
+                console.warn(`Error extracting face at position ${pos}:`, e);
             }
         }
-
-        for (let i = baselineIdx; i < frames.length; i++) {
-            if (this.progressCallback && (i - baselineIdx) % 5 === 0) {
-                const maxFrames = frames.length - baselineIdx;
-                this.progressCallback(Math.min(i - baselineIdx + 1, maxFrames), maxFrames, 'Extracting faces', this.stepHistory);
-                // Yield to allow UI update
-                await new Promise(resolve => setTimeout(resolve, 0));
-            }
-            
-            this.cv.cvtColor(frames[i].mat, gray, this.cv.COLOR_RGBA2GRAY);
-            
-            for (let j = 0; j < rects.length; j++) {
-                const rect = rects[j];
-                const baselineRoi = perCardBaselines[j];
-                if (!baselineRoi) continue;
-                
-                try {
-                    const roi = gray.roi(new this.cv.Rect(rect.x, rect.y, rect.width, rect.height));
-                    
-                    const diff = new this.cv.Mat();
-                    this.cv.absdiff(roi, baselineRoi, diff);
-                    const meanDiff = this.cv.mean(diff)[0];
-                    
-                    // Extract frames with difference from baseline (face revealed)
-                    const meanVal = this.cv.mean(roi)[0];
-                    
-                    // Increased thresholds: meanDiff >15 ensures significant change from baseline
-                    // meanVal 50-180 ensures proper brightness range for face cards
-                    if (meanDiff > 15 && meanVal > 50 && meanVal < 180 && meanDiff > maxDiffs[j]) {
-                        maxDiffs[j] = meanDiff;
-                        if (cardFaces.has(j)) cardFaces.get(j).delete();
-                        const faceRoi = frames[i].mat.roi(new this.cv.Rect(rect.x, rect.y, rect.width, rect.height));
-                        cardFaces.set(j, faceRoi.clone());
-                        faceRoi.delete();
-                    }
-                    
-                    roi.delete();
-                    diff.delete();
-                } catch (e) {
-                    console.warn(`Error processing face ${j}:`, e);
-                }
-            }
-        }
-
-        perCardBaselines.forEach(b => { if (b) b.delete(); });
-        baselineFrameGray.delete();
-        gray.delete();
+        
         this.stepHistory.push({step: 'Extract faces', duration: Date.now() - this.currentStepStart});
 
         console.log(`Extracted ${cardFaces.size} card faces.`);
-        console.log('📦 Extracted face indices:', Array.from(cardFaces.keys()).sort((a, b) => a - b));
-        console.log('📊 Max diff values:', maxDiffs.map((v, i) => `[${i}]: ${v.toFixed(2)}`).join(', '));
-
-        // 5. Find pairs
-        this.currentStepStart = Date.now();
-        const pairs = this.findPairs(cardFaces);
-        this.stepHistory.push({step: 'Match pairs', duration: Date.now() - this.currentStepStart});
+        
+        // Convert assignments to result format
+        const card_assignments: Record<number, {cardType: number, confidence: number} | null> = {};
+        let assignedCount = 0;
+        for (let i = 0; i < rects.length; i++) {
+            const assignment = assignments.get(i);
+            if (assignment) {
+                card_assignments[i] = {
+                    cardType: assignment.cardType,
+                    confidence: assignment.confidence
+                };
+                assignedCount++;
+            } else {
+                card_assignments[i] = null;
+            }
+        }
+        
+        console.log(`✅ Assigned ${assignedCount}/${rects.length} cards to types`);
+        console.log('📊 Assignments:', card_assignments);
         
         // Convert faces to base64 for display
         const grid_faces: Record<string, string | null> = {};
@@ -501,87 +573,13 @@ export class ClientSideSolver {
         cardFaces.forEach(f => f.delete());
 
         return {
-            pairs_count: pairs.length,
-            pairs: pairs as [number, number][],
+            pairs_count: assignedCount,
+            card_assignments,
             grid_faces,
-            status: pairs.length === 12 ? "Solved" : `Found ${pairs.length} pairs`,
+            status: assignedCount === 24 ? "All cards assigned" : `Assigned ${assignedCount}/${rects.length} cards`,
             cards_detected: cardsDetected,
             step_history: this.stepHistory
         };
-    }
-
-    private findPairs(cardFaces: Map<number, any>): [number, number][] {
-        const indices = Array.from(cardFaces.keys()).sort((a, b) => a - b);
-        const processedFaces = new Map<number, any>();
-        
-        for (const idx of indices) {
-            const face = cardFaces.get(idx);
-            const gray = new this.cv.Mat();
-            this.cv.cvtColor(face, gray, this.cv.COLOR_RGBA2GRAY);
-            const resized = new this.cv.Mat();
-            this.cv.resize(gray, resized, new this.cv.Size(64, 64));
-            // Equalize hist for better matching
-            this.cv.equalizeHist(resized, resized);
-            processedFaces.set(idx, resized);
-            gray.delete();
-        }
-
-        const scores: { score: number, i: number, j: number }[] = [];
-        for (let i = 0; i < indices.length; i++) {
-            for (let j = i + 1; j < indices.length; j++) {
-                const idx1 = indices[i];
-                const idx2 = indices[j];
-                const face1 = processedFaces.get(idx1);
-                const face2 = processedFaces.get(idx2);
-                
-                const res = new this.cv.Mat();
-                this.cv.matchTemplate(face1, face2, res, this.cv.TM_CCOEFF_NORMED);
-                const score = res.data32F[0];
-                scores.push({ score, i: idx1, j: idx2 });
-                res.delete();
-            }
-        }
-
-        scores.sort((a, b) => b.score - a.score);
-        
-        console.log('\n🔍 All Pair Scores (Top 30):');
-        scores.slice(0, 30).forEach(({ score, i, j }, idx) => {
-            console.log(`  ${idx + 1}. (${i}, ${j}): ${score.toFixed(4)} ${score > 0.4 ? '✅' : '❌'}`);
-        });
-        
-        const pairs: [number, number][] = [];
-        const matched = new Set<number>();
-        
-        console.log(`\n🎯 DEBUG: Starting greedy selection with ${indices.length} indices.`);
-        for (const { score, i, j } of scores) {
-            if (matched.has(i) || matched.has(j)) {
-                if (score > 0.4) {
-                    console.log(`  ⏭️  Skipped (${i}, ${j}): ${score.toFixed(4)} - already matched`);
-                }
-                continue;
-            }
-            if (score > 0.4) {
-                pairs.push([i, j]);
-                matched.add(i);
-                matched.add(j);
-                console.log(`  ✅ Matched (${i}, ${j}) with score ${score.toFixed(4)}. Total pairs: ${pairs.length}`);
-            } else {
-                console.log(`  ❌ Rejected (${i}, ${j}): ${score.toFixed(4)} - below threshold`);
-            }
-            if (pairs.length === 12) {
-                console.log('\n✨ DEBUG: Found all 12 pairs.');
-                break;
-            }
-        }
-        
-        if (pairs.length < 12) {
-            const unmatched = indices.filter(idx => !matched.has(idx));
-            console.log(`Warning: Only found ${pairs.length} pairs. Unmatched: ${unmatched}`);
-            console.log(`DEBUG: Matched indices: ${Array.from(matched).sort((a, b) => a - b)}`);
-        }
-
-        processedFaces.forEach(f => f.delete());
-        return pairs;
     }
 
     /**
@@ -589,6 +587,8 @@ export class ClientSideSolver {
      */
     dispose() {
         if (this.backCardTemplate) this.backCardTemplate.delete();
+        this.referenceTemplates.forEach(mat => mat.delete());
+        this.referenceTemplates.clear();
         this.cardFaces.forEach(mat => mat.delete());
         this.cardFaces.clear();
     }
