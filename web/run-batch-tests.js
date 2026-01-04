@@ -2,7 +2,8 @@
 
 /**
  * Batch Test Runner for Minigame Videos
- * Discovers minigame_{X}-{S}_{E}.mp4 files and runs tests on each
+ * Discovers minigame_{X}-{S}_{E}.(mp4|webm|mov|mkv|avi|flv) files and runs tests on each
+ * If E=0, loads full video without trimming
  */
 
 const fs = require('fs');
@@ -10,6 +11,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const MINIGAMES_DIR = path.join(__dirname, '../7kMinigames');
+const SUPPORTED_FORMATS = ['.mp4', '.webm', '.mov', '.mkv', '.avi', '.flv'];
 
 // ANSI color codes
 const colors = {
@@ -27,14 +29,16 @@ function log(message, color = 'reset') {
 }
 
 function parseMinigameFilename(filename) {
-  // Match pattern: minigame_{X}-{S}_{E}.mp4
-  const match = filename.match(/minigame_(\d+)-(\d+(?:\.\d+)?)_(\d+(?:\.\d+)?)\.mp4/);
+  // Match pattern: minigame_{X}-{S}_{E}.(mp4|webm|mov|mkv|avi|flv)
+  // E=0 means full video, no need to trim
+  const match = filename.match(/minigame_(\d+)-(\d+(?:\.\d+)?)_(\d+(?:\.\d+)?)\.(mp4|webm|mov|mkv|avi|flv)$/);
   if (match) {
     return {
       filename,
       testNumber: parseInt(match[1]),
       startTime: parseFloat(match[2]),
-      endTime: parseFloat(match[3])
+      endTime: parseFloat(match[3]),
+      isFullVideo: parseFloat(match[3]) === 0
     };
   }
   return null;
@@ -54,21 +58,25 @@ async function runTests() {
     process.exit(1);
   }
 
-  // Discover minigame files
-  const files = fs.readdirSync(MINIGAMES_DIR).filter(f => f.endsWith('.mp4'));
+  // Discover minigame files (all supported formats)
+  const files = fs.readdirSync(MINIGAMES_DIR).filter(f => {
+    const ext = path.extname(f);
+    return SUPPORTED_FORMATS.includes(ext);
+  });
   const minigames = files
     .map(f => parseMinigameFilename(f))
     .filter(m => m !== null)
     .sort((a, b) => a.testNumber !== b.testNumber ? a.testNumber - b.testNumber : a.startTime - b.startTime);
 
   if (minigames.length === 0) {
-    log(`✗ No minigame files matching pattern minigame_*-*_*.mp4 found in ${MINIGAMES_DIR}`, 'red');
+    log(`✗ No minigame files matching pattern minigame_*-*_*.(mp4|webm|mov|mkv|avi|flv) found in ${MINIGAMES_DIR}`, 'red');
     process.exit(1);
   }
 
   log(`\n📋 Found ${minigames.length} test video(s):`, 'blue');
   minigames.forEach((m, idx) => {
-    log(`  ${idx + 1}. ${m.filename} (range: ${m.startTime}s - ${m.endTime}s)`, 'yellow');
+    const rangeStr = m.isFullVideo ? 'full video' : `range: ${m.startTime}s - ${m.endTime}s`;
+    log(`  ${idx + 1}. ${m.filename} (${rangeStr})`, 'yellow');
   });
 
   // Summary stats
@@ -87,14 +95,17 @@ async function runTests() {
     const videoPath = path.relative(__dirname, fullVideoPath);
 
     log(`\n[${testNum}/${minigames.length}] Running: ${minigame.filename}`, 'magenta');
-    log(`Range: ${minigame.startTime}s - ${minigame.endTime}s`, 'yellow');
+    const rangeStr = minigame.isFullVideo ? 'Full video' : `Range: ${minigame.startTime}s - ${minigame.endTime}s`;
+    log(rangeStr, 'yellow');
     log('─'.repeat(60), 'yellow');
 
     const testStartTime = Date.now();
     
     try {
       // Run the test
-      const command = `node test-video-upload.js ${videoPath} ${minigame.startTime} ${minigame.endTime}`;
+      // If isFullVideo, pass endTime=0 to indicate full video processing
+      const endTimeArg = minigame.isFullVideo ? 0 : minigame.endTime;
+      const command = `node test-video-upload.js ${videoPath} ${minigame.startTime} ${endTimeArg}`;
       execSync(command, { 
         stdio: 'inherit',
         cwd: __dirname

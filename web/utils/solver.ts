@@ -22,6 +22,8 @@ export interface SolveResult {
     status: string;
     cards_detected?: number;
     step_history?: Array<{step: string, duration: number}>;
+    baseline_frame_idx?: number;
+    baseline_frame_ts?: number;
 }
 
 export type ProgressCallback = (current: number, total: number, stage: string, stepHistory?: Array<{step: string, duration: number}>) => void;
@@ -41,6 +43,8 @@ export class ClientSideSolver {
     private progressCallback?: ProgressCallback;
     private stepHistory: Array<{step: string, duration: number}> = [];
     private currentStepStart: number = 0;
+    private baselineFrameIdx: number = -1;
+    private baselineFrameTs: number = -1;
 
     constructor(progressCallback?: ProgressCallback) {
         this.cv = typeof window !== 'undefined' ? window.cv : null;
@@ -144,6 +148,11 @@ export class ClientSideSolver {
 
     /**
      * Extracts frames from a video Blob at a specific interval.
+     * @param videoBlob - The video file as a Blob
+     * @param fps - Frames per second to extract (default: 10)
+     * @param startTime - Start time in seconds (default: 0)
+     * @param endTime - End time in seconds. If undefined or 0, processes the full video without trimming
+     * @returns Array of frames with timestamps and OpenCV Mat objects
      */
     private async extractFramesFromBlob(videoBlob: Blob, fps: number = 10, startTime: number = 0, endTime?: number): Promise<{ ts: number, mat: any }[]> {
         return new Promise((resolve, reject) => {
@@ -276,6 +285,9 @@ export class ClientSideSolver {
                 }
 
                 if (uniqueDetections.length === 24) {
+                    this.baselineFrameIdx = i;
+                    this.baselineFrameTs = frames[i].ts;
+                    console.log(`✅ Found all 24 cards at frame index ${i}, timestamp ${frames[i].ts.toFixed(2)}s`);
                     resizedTemplate.delete();
                     res.delete();
                     gray.delete();
@@ -345,7 +357,9 @@ export class ClientSideSolver {
                     }
 
                     if (uniqueDetections.length === 24) {
-                        console.log(`✅ Found 24 cards at frame ${i} during extended scan`);
+                        this.baselineFrameIdx = i;
+                        this.baselineFrameTs = frames[i].ts;
+                        console.log(`✅ Found all 24 cards at frame index ${i}, timestamp ${frames[i].ts.toFixed(2)}s during extended scan`);
                         resizedTemplate.delete();
                         res.delete();
                         gray.delete();
@@ -460,24 +474,28 @@ export class ClientSideSolver {
     }
 
     /**
-     * Main solve method.
-     * @param videoBlob The video blob to process
-     * @param startTime Optional start time in seconds (default: 0)
-     * @param endTime Optional end time in seconds (default: video duration)
+     * Solves the card matching puzzle from a video.
+     * @param videoBlob - The video file as a Blob
+     * @param startTime - Start time in seconds (default: 0)
+     * @param endTime - End time in seconds. If undefined or 0, processes the full video without trimming
+     * @returns SolveResult containing card assignments and baseline frame information
      */
     async solve(videoBlob: Blob, startTime: number = 0, endTime?: number): Promise<SolveResult> {
         console.log(`solve() called with startTime=${startTime}, endTime=${endTime}`);
         
         if (!this.cv) throw new Error("OpenCV.js not initialized");
         
+        // Reset baseline frame tracking for each new solve operation
+        this.baselineFrameIdx = -1;
+        this.baselineFrameTs = -1;
         this.stepHistory = [];
         
         // 1. Extract frames
         this.currentStepStart = Date.now();
         const frames = await this.extractFramesFromBlob(videoBlob, 10, startTime, endTime);
         this.stepHistory.push({step: 'Extract frames', duration: Date.now() - this.currentStepStart});
-
-        // 2. Detect card locations
+        
+        // 2. Detect card locations to find baseline frame
         this.currentStepStart = Date.now();
         const rects = await this.detectCardLocations(frames);
         this.stepHistory.push({step: 'Detect cards', duration: Date.now() - this.currentStepStart});
@@ -486,6 +504,26 @@ export class ClientSideSolver {
         if (rects.length === 0) {
             frames.forEach(f => f.mat.delete());
             return { pairs_count: 0, card_assignments: {}, grid_faces: {}, status: "No cards detected", cards_detected: 0 };
+        }
+
+        // Trim frames to 6 seconds starting from baseline frame
+        // This optimizes processing by focusing only on relevant frames after game starts
+        let processFrames = frames;
+        if (this.baselineFrameIdx >= 0 && this.baselineFrameTs >= 0) {
+            const SECONDS_AFTER_BASELINE = 6;
+            const baselineIdx = frames.findIndex(f => f.ts >= this.baselineFrameTs);
+            if (baselineIdx >= 0) {
+                const endIdx = frames.findIndex((f, idx) => idx > baselineIdx && f.ts >= this.baselineFrameTs + SECONDS_AFTER_BASELINE);
+                const trimEndIdx = endIdx >= 0 ? endIdx : frames.length;
+                processFrames = frames.slice(baselineIdx, trimEndIdx);
+                
+                // Clean up frames outside the processing window
+                frames.slice(0, baselineIdx).forEach(f => f.mat.delete());
+                frames.slice(trimEndIdx).forEach(f => f.mat.delete());
+                
+                const windowDurationSec = (processFrames[processFrames.length - 1].ts - this.baselineFrameTs).toFixed(2);
+                console.log(`📊 Using baseline-aligned window: frames ${baselineIdx}-${trimEndIdx} (${processFrames.length} frames, ${windowDurationSec}s)`);
+            }
         }
 
         // Sort rects: top-to-bottom, then left-to-right
@@ -502,7 +540,7 @@ export class ClientSideSolver {
 
         // 3. Assign card types using reference templates
         this.currentStepStart = Date.now();
-        const assignments = await this.assignCardTypes(frames, rects, 2);
+        const assignments = await this.assignCardTypes(processFrames, rects, 2);
         this.stepHistory.push({step: 'Assign card types', duration: Date.now() - this.currentStepStart});
 
         // 4. Extract faces from best matching frames
@@ -517,7 +555,7 @@ export class ClientSideSolver {
             const frameIdx = assignment.frameIdx;
             
             try {
-                const faceRoi = frames[frameIdx].mat.roi(new this.cv.Rect(rect.x, rect.y, rect.width, rect.height));
+                const faceRoi = processFrames[frameIdx].mat.roi(new this.cv.Rect(rect.x, rect.y, rect.width, rect.height));
                 cardFaces.set(pos, faceRoi.clone());
                 faceRoi.delete();
             } catch (e) {
@@ -569,8 +607,13 @@ export class ClientSideSolver {
         }
 
         // Cleanup
-        frames.forEach(f => f.mat.delete());
+        processFrames.forEach(f => f.mat.delete());
         cardFaces.forEach(f => f.delete());
+
+        // Log baseline frame info if found
+        if (this.baselineFrameIdx >= 0) {
+            console.log(`📍 Game baseline frame: index ${this.baselineFrameIdx}, timestamp ${this.baselineFrameTs.toFixed(2)}s`);
+        }
 
         return {
             pairs_count: assignedCount,
@@ -578,7 +621,9 @@ export class ClientSideSolver {
             grid_faces,
             status: assignedCount === 24 ? "All cards assigned" : `Assigned ${assignedCount}/${rects.length} cards`,
             cards_detected: cardsDetected,
-            step_history: this.stepHistory
+            step_history: this.stepHistory,
+            baseline_frame_idx: this.baselineFrameIdx,
+            baseline_frame_ts: this.baselineFrameTs
         };
     }
 

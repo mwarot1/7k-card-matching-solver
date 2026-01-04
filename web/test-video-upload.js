@@ -1,7 +1,9 @@
 /**
  * Automated Video Upload Test Script
  * Run with: node test-video-upload.js [video-path] [start-time] [end-time]
- * Example: node test-video-upload.js ../7kMinigames/Minigames_entry.mp4 3 8
+ * If end-time is 0, loads full video without trimming
+ * Example: node test-video-upload.js ../7kMinigames/minigame_1-3_8.mp4 3 8
+ * Example: node test-video-upload.js ../7kMinigames/minigame_3-0_0.webm 0 0
  */
 
 const puppeteer = require('puppeteer');
@@ -10,7 +12,7 @@ const fs = require('fs');
 
 // Configuration
 const APP_URL = 'http://localhost:3000/7k-card-matching-solver';
-const DEFAULT_VIDEO = '../7kMinigames/Minigames_entry.mp4';
+const DEFAULT_VIDEO = '../7kMinigames/minigame_1-3_8.mp4';
 const DEFAULT_START = 3;
 const DEFAULT_END = 8;
 const TIMEOUT = 120000; // 2 minutes
@@ -19,6 +21,9 @@ const TIMEOUT = 120000; // 2 minutes
 const videoPath = process.argv[2] || DEFAULT_VIDEO;
 const rangeStart = parseFloat(process.argv[3] || DEFAULT_START);
 const rangeEnd = parseFloat(process.argv[4] || DEFAULT_END);
+
+// If rangeEnd is 0, it means load full video
+const isFullVideo = rangeEnd === 0;
 
 // Color codes for terminal output
 const colors = {
@@ -50,6 +55,9 @@ function log(level, message) {
             break;
         case 'step':
             console.log(`${colors.cyan}${prefix} 🔹 ${message}${colors.reset}`);
+            break;
+        case 'debug':
+            console.log(`${colors.cyan}${prefix} 🔍 ${message}${colors.reset}`);
             break;
         default:
             console.log(`${prefix} ${message}`);
@@ -111,12 +119,18 @@ async function runTest() {
         log('info', '🎬 Starting Automated Video Upload Test');
         log('info', '═══════════════════════════════════════');
         log('info', `Video: ${path.basename(absoluteVideoPath)} (${videoSizeMB} MB)`);
-        log('info', `Range: ${rangeStart}s - ${rangeEnd}s (${rangeEnd - rangeStart}s duration)`);
+        
+        if (isFullVideo) {
+            log('info', `Processing: Full video (start from ${rangeStart}s)`);
+        } else {
+            log('info', `Range: ${rangeStart}s - ${rangeEnd}s (${rangeEnd - rangeStart}s duration)`);
+        }
+        
         log('info', `Target: ${APP_URL}`);
         log('info', '═══════════════════════════════════════\n');
         
         // Validate range
-        if (rangeStart >= rangeEnd) {
+        if (!isFullVideo && rangeStart >= rangeEnd) {
             log('error', 'Start time must be less than end time');
             process.exit(1);
         }
@@ -139,15 +153,27 @@ async function runTest() {
         const page = await browser.newPage();
         await page.setViewport({ width: 1920, height: 1080 });
         
+        // Track assignment count from browser logs
+        let assignmentCount = 0;
+        
         // Capture console logs from the browser
         page.on('console', msg => {
             const type = msg.type();
             const text = msg.text();
+            
+            // Extract assignment count from solver logs
+            // Pattern: "✅ Assigned X/Y cards to types"
+            const assignmentMatch = text.match(/Assigned\s+(\d+)\/(\d+)\s+cards/);
+            if (assignmentMatch) {
+                assignmentCount = parseInt(assignmentMatch[1]);
+                log('debug', `Captured assignment count: ${assignmentCount}/${assignmentMatch[2]}`);
+            }
+            
             if (type === 'error') {
                 log('error', `Browser Error: ${text}`);
             } else if (type === 'warning') {
                 log('warning', `Browser Warning: ${text}`);
-            } else if (type === 'log' || text.includes('Error') || text.includes('Failed') || text.includes('Extracting') || text.includes('extractVideoSegment') || text.includes('solve()') || text.includes('Calling solve')) {
+            } else if (type === 'log' || text.includes('Error') || text.includes('Failed') || text.includes('Extracting') || text.includes('extractVideoSegment') || text.includes('solve()') || text.includes('Calling solve') || text.includes('Assigned')) {
                 log('info', `Browser: ${text}`);
             }
         });
@@ -191,31 +217,36 @@ async function runTest() {
         }
         log('success', 'Video loaded successfully');
         
-        // Step 3: Set range using number inputs
-        log('step', `Step 3: Setting time range to ${rangeStart}s - ${rangeEnd}s...`);
-        
-        // Use number inputs which properly trigger React's onChange
-        await page.type('#start-time-input', '', { delay: 0 });
-        await page.evaluate(() => {
-            document.querySelector('#start-time-input').value = '';
-        });
-        await page.type('#start-time-input', rangeStart.toString());
-        
-        await page.type('#end-time-input', '', { delay: 0 });
-        await page.evaluate(() => {
-            document.querySelector('#end-time-input').value = '';
-        });
-        await page.type('#end-time-input', rangeEnd.toString());
-        
-        // Trigger change event
-        await page.evaluate(() => {
-            document.querySelector('#start-time-input').dispatchEvent(new Event('change', { bubbles: true }));
-            document.querySelector('#end-time-input').dispatchEvent(new Event('change', { bubbles: true }));
-        });
-        
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        log('success', `Time range set: ${rangeStart}s - ${rangeEnd}s`);
+        // Step 3: Set range using number inputs (or use full video if rangeEnd=0)
+        if (isFullVideo) {
+            log('step', 'Step 3: Using full video, no range trimming...');
+            log('success', 'Full video mode enabled');
+        } else {
+            log('step', `Step 3: Setting time range to ${rangeStart}s - ${rangeEnd}s...`);
+            
+            // Use number inputs which properly trigger React's onChange
+            await page.type('#start-time-input', '', { delay: 0 });
+            await page.evaluate(() => {
+                document.querySelector('#start-time-input').value = '';
+            });
+            await page.type('#start-time-input', rangeStart.toString());
+            
+            await page.type('#end-time-input', '', { delay: 0 });
+            await page.evaluate(() => {
+                document.querySelector('#end-time-input').value = '';
+            });
+            await page.type('#end-time-input', rangeEnd.toString());
+            
+            // Trigger change event
+            await page.evaluate(() => {
+                document.querySelector('#start-time-input').dispatchEvent(new Event('change', { bubbles: true }));
+                document.querySelector('#end-time-input').dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            log('success', `Time range set: ${rangeStart}s - ${rangeEnd}s`);
+        }
         
         // Step 4: Click Process Video button
         log('step', 'Step 4: Clicking "Process Video" button...');
@@ -287,29 +318,9 @@ async function runTest() {
         // Step 6: Validate results
         log('step', 'Step 6: Validating results...');
         
-        const cardAssignments = await page.evaluate(() => {
-            const cardItems = document.querySelectorAll('.card-item');
-            let assignedCount = 0;
-            const assignments = {};
-            
-            cardItems.forEach((card, idx) => {
-                const textContent = card.textContent;
-                // Check if card has assignment (contains card type number)
-                if (textContent && textContent.match(/\d+/)) {
-                    const cardType = textContent.match(/Card\s*(\d+)/)?.[1] || textContent.match(/\d+/)?.[0];
-                    const confidence = textContent.match(/(\d+(?:\.\d+)?)%/)?.[1];
-                    if (cardType) {
-                        assignedCount++;
-                        assignments[idx] = { type: cardType, confidence };
-                    }
-                }
-            });
-            
-            return { assignedCount, totalCards: cardItems.length, assignments };
-        });
-        
+        // Use the assignment count captured from browser logs
         const totalCards = 24;
-        const assignedCards = cardAssignments.assignedCount;
+        const assignedCards = assignmentCount > 0 ? assignmentCount : 0;
         const successRate = ((assignedCards / totalCards) * 100).toFixed(1);
         
         log('success', '\n🎉 TEST COMPLETED SUCCESSFULLY! 🎉');
