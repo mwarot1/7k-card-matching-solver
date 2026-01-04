@@ -10,7 +10,6 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const MINIGAMES_DIR = path.join(__dirname, '../7kMinigames');
-const TEST_SCRIPT = path.join(__dirname, 'test-video-upload.js');
 
 // ANSI color codes
 const colors = {
