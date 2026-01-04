@@ -2,7 +2,7 @@
 
 /**
  * Batch Test Runner for Minigame Videos
- * Discovers minigame_{X}-{S}_{E}.(mp4|webm|mov|mkv) files and runs tests on each
+ * Discovers minigame_{X}-{S}_{E}.(mp4|webm|mov|mkv|avi|flv) files and runs tests on each
  * If E=0, loads full video without trimming
  */
 
@@ -31,11 +31,8 @@ function log(message, color = 'reset') {
 function parseMinigameFilename(filename) {
   // Match pattern: minigame_{X}-{S}_{E}.(mp4|webm|mov|mkv|avi|flv)
   // E=0 means full video, no need to trim
-  const match = filename.match(/minigame_(\d+)-(\d+(?:\.\d+)?)_(\d+(?:\.\d+)?)\.(\w+)$/);
+  const match = filename.match(/minigame_(\d+)-(\d+(?:\.\d+)?)_(\d+(?:\.\d+)?)\.(mp4|webm|mov|mkv|avi|flv)$/);
   if (match) {
-    const ext = '.' + match[4];
-    if (!SUPPORTED_FORMATS.includes(ext)) return null;
-    
     return {
       filename,
       testNumber: parseInt(match[1]),

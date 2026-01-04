@@ -20,7 +20,7 @@ const TIMEOUT = 120000; // 2 minutes
 // Get command line arguments
 const videoPath = process.argv[2] || DEFAULT_VIDEO;
 const rangeStart = parseFloat(process.argv[3] || DEFAULT_START);
-let rangeEnd = parseFloat(process.argv[4] || DEFAULT_END);
+const rangeEnd = parseFloat(process.argv[4] || DEFAULT_END);
 
 // If rangeEnd is 0, it means load full video
 const isFullVideo = rangeEnd === 0;

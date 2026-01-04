@@ -148,6 +148,11 @@ export class ClientSideSolver {
 
     /**
      * Extracts frames from a video Blob at a specific interval.
+     * @param videoBlob - The video file as a Blob
+     * @param fps - Frames per second to extract (default: 10)
+     * @param startTime - Start time in seconds (default: 0)
+     * @param endTime - End time in seconds. If undefined or 0, processes the full video without trimming
+     * @returns Array of frames with timestamps and OpenCV Mat objects
      */
     private async extractFramesFromBlob(videoBlob: Blob, fps: number = 10, startTime: number = 0, endTime?: number): Promise<{ ts: number, mat: any }[]> {
         return new Promise((resolve, reject) => {
@@ -469,16 +474,20 @@ export class ClientSideSolver {
     }
 
     /**
-     * Main solve method.
-     * @param videoBlob The video blob to process
-     * @param startTime Optional start time in seconds (default: 0)
-     * @param endTime Optional end time in seconds (default: video duration)
+     * Solves the card matching puzzle from a video.
+     * @param videoBlob - The video file as a Blob
+     * @param startTime - Start time in seconds (default: 0)
+     * @param endTime - End time in seconds. If undefined or 0, processes the full video without trimming
+     * @returns SolveResult containing card assignments and baseline frame information
      */
     async solve(videoBlob: Blob, startTime: number = 0, endTime?: number): Promise<SolveResult> {
         console.log(`solve() called with startTime=${startTime}, endTime=${endTime}`);
         
         if (!this.cv) throw new Error("OpenCV.js not initialized");
         
+        // Reset baseline frame tracking for each new solve operation
+        this.baselineFrameIdx = -1;
+        this.baselineFrameTs = -1;
         this.stepHistory = [];
         
         // 1. Extract frames
@@ -512,7 +521,8 @@ export class ClientSideSolver {
                 frames.slice(0, baselineIdx).forEach(f => f.mat.delete());
                 frames.slice(trimEndIdx).forEach(f => f.mat.delete());
                 
-                console.log(`📊 Using baseline-aligned window: frames ${baselineIdx}-${trimEndIdx} (${processFrames.length} frames, ${(this.baselineFrameTs + SECONDS_AFTER_BASELINE - this.baselineFrameTs).toFixed(2)}s)`);
+                const windowDurationSec = (processFrames[processFrames.length - 1].ts - this.baselineFrameTs).toFixed(2);
+                console.log(`📊 Using baseline-aligned window: frames ${baselineIdx}-${trimEndIdx} (${processFrames.length} frames, ${windowDurationSec}s)`);
             }
         }
 
