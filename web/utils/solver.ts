@@ -157,13 +157,35 @@ export class ClientSideSolver {
     private async extractFramesFromBlob(videoBlob: Blob, fps: number = 10, startTime: number = 0, endTime?: number): Promise<{ ts: number, mat: any }[]> {
         return new Promise((resolve, reject) => {
             const video = document.createElement('video');
-            video.src = URL.createObjectURL(videoBlob);
+            const objectUrl = URL.createObjectURL(videoBlob);
+            video.src = objectUrl;
             video.muted = true;
             video.playsInline = true;
             
             const frames: { ts: number, mat: any }[] = [];
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
+            
+            // Add timeout protection
+            const TIMEOUT_MS = 120000; // 2 minute timeout for entire extraction
+            const SEEK_TIMEOUT_MS = 5000; // 5 second timeout per seek
+            let timeoutHandle: NodeJS.Timeout | null = null;
+            let seekTimeoutHandle: NodeJS.Timeout | null = null;
+            let isCleaned = false;
+
+            const cleanup = () => {
+                if (isCleaned) return;
+                isCleaned = true;
+                if (timeoutHandle) clearTimeout(timeoutHandle);
+                if (seekTimeoutHandle) clearTimeout(seekTimeoutHandle);
+                try {
+                    video.pause();
+                    video.src = '';
+                    URL.revokeObjectURL(objectUrl);
+                } catch (e) {
+                    // Ignore cleanup errors
+                }
+            };
 
             video.onloadedmetadata = async () => {
                 canvas.width = video.videoWidth;
@@ -175,7 +197,18 @@ export class ClientSideSolver {
                 const duration = Math.min(videoEnd - videoStart, 30); // Max 30 seconds
                 const interval = 1 / fps;
                 
-                console.log(`Extracting frames from ${videoStart}s to ${videoStart + duration}s (${duration}s duration) at ${fps} FPS`);
+                // Estimate total frames to extract
+                const estimatedFrames = Math.ceil(duration * fps);
+                console.log(`Extracting frames from ${videoStart}s to ${(videoStart + duration).toFixed(2)}s (${duration}s duration) at ${fps} FPS (~${estimatedFrames} frames)`);
+
+                // Set overall timeout
+                timeoutHandle = setTimeout(() => {
+                    cleanup();
+                    reject(new Error(`Frame extraction timeout after ${TIMEOUT_MS}ms - video may be too long or too complex`));
+                }, TIMEOUT_MS);
+
+                let framesExtracted = 0;
+                let framesFailed = 0;
 
                 try {
                     for (let offset = 0; offset < duration; offset += interval) {
@@ -183,42 +216,88 @@ export class ClientSideSolver {
                         if (ts > videoEnd) break; // Safety check
                         
                         video.currentTime = ts;
-                        await new Promise(r => {
-                            video.onseeked = r;
-                        });
+                        
+                        // Seek with timeout
+                        const seekResult = await Promise.race([
+                            new Promise<boolean>(r => {
+                                seekTimeoutHandle = setTimeout(() => {
+                                    seekTimeoutHandle = null;
+                                    r(false); // Seek timed out
+                                }, SEEK_TIMEOUT_MS);
+                                
+                                const handler = () => {
+                                    if (seekTimeoutHandle) {
+                                        clearTimeout(seekTimeoutHandle);
+                                        seekTimeoutHandle = null;
+                                    }
+                                    video.onseeked = null;
+                                    r(true);
+                                };
+                                video.onseeked = handler;
+                            })
+                        ]);
+
+                        if (!seekResult) {
+                            console.warn(`Seek timeout at ${ts.toFixed(2)}s - skipping frame`);
+                            framesFailed++;
+                            continue;
+                        }
+
                         if (ctx) {
-                            ctx.drawImage(video, 0, 0);
                             try {
+                                ctx.drawImage(video, 0, 0);
                                 const mat = this.cv.imread(canvas);
+                                
                                 if (!mat || mat.empty()) {
-                                    console.warn(`Frame at ${ts}s is empty, skipping`);
+                                    console.warn(`Frame at ${ts.toFixed(2)}s is empty`);
+                                    if (mat) mat.delete();
+                                    framesFailed++;
                                     continue;
                                 }
+                                
                                 frames.push({ ts, mat });
+                                framesExtracted++;
+                                
+                                // Periodically log progress for long extractions
+                                if (framesExtracted % 20 === 0) {
+                                    console.log(`Progress: extracted ${framesExtracted} frames...`);
+                                }
                             } catch (cvError) {
-                                console.error(`OpenCV error reading frame at ${ts}s:`, cvError);
+                                console.warn(`OpenCV error at ${ts.toFixed(2)}s: ${cvError instanceof Error ? cvError.message : String(cvError)}`);
+                                framesFailed++;
                                 // Continue to next frame instead of failing completely
                                 continue;
                             }
                         }
                     }
-                    URL.revokeObjectURL(video.src);
+
+                    if (timeoutHandle) clearTimeout(timeoutHandle);
                     if (frames.length === 0) {
-                        reject(new Error('No frames could be extracted from video'));
+                        cleanup();
+                        reject(new Error(`Failed to extract any frames (${framesFailed} failed)`));
                     } else {
-                        console.log(`Successfully extracted ${frames.length} frames`);
+                        cleanup();
+                        console.log(`Successfully extracted ${framesExtracted} frames (${framesFailed} failed)`);
                         resolve(frames);
                     }
                 } catch (err) {
-                    URL.revokeObjectURL(video.src);
+                    cleanup();
                     reject(err);
                 }
             };
 
             video.onerror = (e) => {
-                URL.revokeObjectURL(video.src);
-                reject(e);
+                cleanup();
+                reject(new Error(`Video load error: ${e instanceof Event ? e.type : String(e)}`));
             };
+
+            // Add abort mechanism for metadata loading
+            setTimeout(() => {
+                if (!video.readyState && !isCleaned) {
+                    cleanup();
+                    reject(new Error('Video metadata failed to load within 30 seconds'));
+                }
+            }, 30000);
         });
     }
 
@@ -502,7 +581,16 @@ export class ClientSideSolver {
         const cardsDetected = rects.length;
         
         if (rects.length === 0) {
-            frames.forEach(f => f.mat.delete());
+            // Cleanup frames immediately on failure
+            frames.forEach(f => {
+                if (f && f.mat) {
+                    try {
+                        f.mat.delete();
+                    } catch (e) {
+                        console.warn('Error deleting frame on early exit:', e);
+                    }
+                }
+            });
             return { pairs_count: 0, card_assignments: {}, grid_faces: {}, status: "No cards detected", cards_detected: 0 };
         }
 
@@ -606,9 +694,29 @@ export class ClientSideSolver {
             }
         }
 
-        // Cleanup
-        processFrames.forEach(f => f.mat.delete());
-        cardFaces.forEach(f => f.delete());
+        // Comprehensive cleanup - ensure ALL frame mats are deleted
+        try {
+            processFrames.forEach(f => {
+                if (f && f.mat) {
+                    try {
+                        f.mat.delete();
+                    } catch (e) {
+                        console.warn('Error deleting process frame mat:', e);
+                    }
+                }
+            });
+            cardFaces.forEach(f => {
+                if (f) {
+                    try {
+                        f.delete();
+                    } catch (e) {
+                        console.warn('Error deleting card face:', e);
+                    }
+                }
+            });
+        } catch (e) {
+            console.warn('Error during cleanup:', e);
+        }
 
         // Log baseline frame info if found
         if (this.baselineFrameIdx >= 0) {
