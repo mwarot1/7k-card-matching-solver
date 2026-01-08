@@ -69,7 +69,7 @@ export class ClientSideSolver {
 
         // Load 12 reference face templates
         for (let cardType = 1; cardType <= 12; cardType++) {
-            const refUrl = `/7k-card-matching-solver/templates/reference_faces/card_${cardType}.png`;
+            const refUrl = `/templates/reference_faces/card_${cardType}.png`;
             try {
                 const refImg = await this.loadImage(refUrl);
                 const refMat = this.cv.imread(refImg);
