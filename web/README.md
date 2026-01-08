@@ -1,5 +1,35 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## 7K Minigame Tools
+
+Collection of tools to help with Seven Knights minigames.
+
+### Features
+
+1. **Card Matching Solver** (`/7k-card-matching-solver`)
+   - AI-powered card matching solver
+   - Screen recording & video upload support
+   - Real-time card detection
+
+2. **Coupon Redemption** (`/coupon-usage`)
+   - Batch redeem multiple coupons
+   - Pre-configured coupon list from `config/coupons.json`
+   - Add/remove coupons manually
+
+### Configuration
+
+Edit `config/coupons.json` to update the default coupon list:
+
+```json
+{
+  "coupons": [
+    "COUPON1",
+    "COUPON2",
+    "COUPON3"
+  ]
+}
+```
+
 ## Getting Started
 
 First, run the development server:

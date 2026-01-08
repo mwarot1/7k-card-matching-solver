@@ -28,7 +28,7 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <Script 
-          src="/7k-card-matching-solver/lib/opencv.js"
+          src="/lib/opencv.js"
           strategy="beforeInteractive"
         />
       </head>
