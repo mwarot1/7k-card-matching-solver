@@ -6,6 +6,9 @@ import path from 'path';
 const SHEET_ID = '16E8p24Gm2jCAR0Ta7bDBq91TuMRDJ0M0xLJLFNJhMEE';
 const SHEET_NAME = 'coupon';
 
+// Cache for 1 minute to prevent spamming
+export const revalidate = 60;
+
 export async function GET(request: NextRequest) {
   try {
     // Load service account credentials from environment variable or file
@@ -61,7 +64,11 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ coupons });
+    return NextResponse.json({ coupons }, {
+      headers: {
+        'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=30',
+      }
+    });
   } catch (error) {
     console.error('Error fetching coupons from Google Sheets:', error);
     return NextResponse.json(
